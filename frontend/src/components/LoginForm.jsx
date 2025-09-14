@@ -108,6 +108,9 @@ const LoginForm = () => {
         <Link to="/signup" style={linkStyle}>
           Don't have an account? Sign Up
         </Link>
+        <Link to="/password-reset" style={linkStyle}>
+          Forgot password?
+        </Link>
       </div>
     </div>
   );
