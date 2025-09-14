@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 const cardStyle = {
   maxWidth: '400px',
@@ -58,6 +58,7 @@ const LoginForm = () => {
     password: ''
   });
   const [message, setMessage] = useState('');
+  const navigate = useNavigate();
 
   const handleChange = (e) => {
     setFormData({...formData, [e.target.name]: e.target.value});
@@ -71,9 +72,10 @@ const LoginForm = () => {
         username: formData.username,
         password: formData.password
       });
-      setMessage('Login successful!');
-      localStorage.setItem('access_token', res.data.access);
-      localStorage.setItem('refresh_token', res.data.refresh);
+      setMessage('2FA code sent to your email!');
+      setTimeout(() => {
+        navigate('/2fa', { state: { user_id: res.data.user_id } });
+      }, 1500); // Redirect to 2FA page
     } catch (err) {
       setMessage('Login failed: ' + (err.response?.data?.detail || err.message));
     }
