@@ -8,14 +8,24 @@ const Email2FA = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const user_id = location.state?.user_id;
+  const initialRole = location.state?.role;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage('');
     try {
-      await axios.post('http://127.0.0.1:8000/api/verify-2fa/', { code, user_id });
+      const res = await axios.post('http://127.0.0.1:8000/api/verify-2fa/', { code, user_id });
+      const role = res.data.role || initialRole; // Use backend response or initial role
       setMessage('2FA successful! Redirecting...');
-      setTimeout(() => navigate('/landing'), 1500);
+      setTimeout(() => {
+        if (role === 'admin') {
+          navigate('/admin-dashboard');
+        } else if (role === 'general_user') {
+          navigate('/landing');
+        } else {
+          navigate('/login'); // fallback for unknown role
+        }
+      }, 1500);
     } catch (err) {
       setMessage('Error: ' + (err.response?.data?.detail || err.message));
     }
