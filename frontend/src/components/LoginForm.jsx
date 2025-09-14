@@ -74,7 +74,7 @@ const LoginForm = () => {
       });
       setMessage('2FA code sent to your email!');
       setTimeout(() => {
-        navigate('/2fa', { state: { user_id: res.data.user_id } });
+        navigate('/2fa', { state: { user_id: res.data.user_id, role: res.data.role } });
       }, 1500); // Redirect to 2FA page
     } catch (err) {
       setMessage('Login failed: ' + (err.response?.data?.detail || err.message));

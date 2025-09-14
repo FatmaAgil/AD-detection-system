@@ -6,6 +6,7 @@ import PasswordResetRequest from './components/PasswordResetRequest';
 import PasswordResetConfirm from './components/PasswordResetConfirm';
 import LandingPage from './components/LandingPage';
 import Email2FA from './components/Email2FA';
+import AdminDashboard from './components/AdminDashboard';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
         <Route path="/password-reset-confirm" element={<PasswordResetConfirm />} />
         <Route path="/2fa" element={<Email2FA />} />
         <Route path="/landing" element={<LandingPage />} />
+        <Route path="/admin-dashboard" element={<AdminDashboard />} />
         <Route path="*" element={<Navigate to="/login" />} />
       </Routes>
     </Router>
