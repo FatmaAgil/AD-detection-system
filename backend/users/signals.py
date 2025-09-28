@@ -18,7 +18,7 @@ def password_reset_token_created(sender, instance, reset_password_token, *args, 
 
 @receiver(post_save, sender=User)
 def create_or_update_user_profile(sender, instance, created, **kwargs):
-    role = 'admin' if instance.is_superuser else 'general_user'
+    role = 'admin' if instance.is_staff else 'general_user'
     profile, profile_created = Profile.objects.get_or_create(user=instance, defaults={'role': role})
     # If the profile already exists, update the role if needed
     if not profile_created and profile.role != role:

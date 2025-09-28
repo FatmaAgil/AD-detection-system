@@ -8,6 +8,7 @@ import LandingPage from './components/LandingPage';
 import Email2FA from './components/Email2FA';
 import AdminDashboard from './components/AdminDashboard';
 import UserDashboard from './components/UserDashboard';
+import UserManagement from './components/UserManagement';
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
         <Route path="/2fa" element={<Email2FA />} />
         <Route path="/landing" element={<LandingPage />} />
         <Route path="/admin-dashboard" element={<AdminDashboard />} />
+        <Route path="/users" element={<UserManagement />} />
         <Route path="*" element={<Navigate to="/login" />} />
         <Route path="/user-dashboard" element={<UserDashboard />} />
       </Routes>
