@@ -3,7 +3,6 @@ import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Users,
-  UserCog,
   FileText,
   Image,
   BarChart3,
@@ -13,9 +12,8 @@ import {
 } from "lucide-react";
 
 const navItems = [
-  { to: "/", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
+  { to: "/admin-dashboard", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
   { to: "/users", label: "User Management", icon: <Users size={20} /> },
-  { to: "/admins", label: "Admin Management", icon: <UserCog size={20} /> },
   { to: "/content", label: "Content", icon: <FileText size={20} /> },
   { to: "/analysis", label: "Analysis", icon: <Image size={20} /> },
   { to: "/analytics", label: "Analytics", icon: <BarChart3 size={20} /> },

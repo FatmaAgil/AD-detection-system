@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { useNavigate, Routes, Route } from "react-router-dom";
+import {  Routes, Route } from "react-router-dom";
 import "../index.css";
 import AdminSidebar from "./AdminSidebar";
+import AdminNavbar from "./AdminNavbar";
 import {
-  Bell,
-  User,
   Users,
   Image as ImageIcon,
   Activity,
@@ -87,7 +86,7 @@ export default function AdminDashboard() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showHeader, setShowHeader] = useState(true);
   const lastScrollY = useRef(window.scrollY);
-  const navigate = useNavigate();
+ // const navigate = useNavigate();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -109,11 +108,7 @@ export default function AdminDashboard() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("refresh_token");
-    navigate("/login");
-  };
+ 
 
   return (
     <div>
@@ -124,47 +119,14 @@ export default function AdminDashboard() {
           transition: "margin-left 0.2s",
           minHeight: "100vh",
           background: "var(--color-background)",
+          paddingTop: 72, // Add this!
         }}
       >
-        <header
-          style={{
-            display: showHeader ? "flex" : "none",
-            alignItems: "center",
-            justifyContent: "space-between",
-            height: 72,
-            background: "#fff",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.03)",
-            padding: "0 32px",
-            position: "sticky",
-            top: 0,
-            zIndex: 5,
-            transition: "top 0.2s",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-           
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
-            <Bell size={22} aria-label="Notifications" />
-            <button
-              onClick={handleLogout}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#222",
-                fontSize: 22,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-              aria-label="Logout"
-              title="Logout"
-            >
-              <User size={22} /> <span style={{ fontSize: 14 }}>Logout</span>
-            </button>
-          </div>
-        </header>
+        <AdminNavbar
+          sidebarCollapsed={sidebarCollapsed}
+          setSidebarCollapsed={setSidebarCollapsed}
+          showHeader={showHeader}
+        />
         <main style={{ padding: 32 }}>
           <Routes>
             <Route path="/" element={<DashboardOverview />} />
