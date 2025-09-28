@@ -9,11 +9,11 @@ from django.contrib.auth import authenticate
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .utils import generate_2fa_code
-from .models import Email2FACode, Profile
-from rest_framework.authentication import SessionAuthentication, BasicAuthentication
+from django.contrib.auth.models import User
+from .models import Email2FACode
 import random
 from django.core.mail import send_mail
+from rest_framework.authentication import SessionAuthentication, BasicAuthentication
 
 # Create your views here.
 
@@ -88,6 +88,28 @@ class CreateAdminView(APIView):
         user.profile.role = 'admin'
         user.profile.save()
         return Response({'message': 'Admin created successfully'}, status=status.HTTP_201_CREATED)
+
+class Resend2FAView(APIView):
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'detail': 'User ID required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            user = User.objects.get(id=user_id)
+            # Optionally delete old codes
+            Email2FACode.objects.filter(user=user).delete()
+            code = str(random.randint(100000, 999999))
+            Email2FACode.objects.create(user=user, code=code)
+            send_mail(
+                'Your 2FA Code',
+                f'Your new 2FA code is: {code}',
+                None,
+                [user.email],
+                fail_silently=False,
+            )
+            return Response({'message': '2FA code resent.'}, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
 
 
