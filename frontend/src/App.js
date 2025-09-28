@@ -7,6 +7,7 @@ import PasswordResetConfirm from './components/PasswordResetConfirm';
 import LandingPage from './components/LandingPage';
 import Email2FA from './components/Email2FA';
 import AdminDashboard from './components/AdminDashboard';
+import UserDashboard from './components/UserDashboard';
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
         <Route path="/landing" element={<LandingPage />} />
         <Route path="/admin-dashboard" element={<AdminDashboard />} />
         <Route path="*" element={<Navigate to="/login" />} />
+        <Route path="/user-dashboard" element={<UserDashboard />} />
       </Routes>
     </Router>
   );

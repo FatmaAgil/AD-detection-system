@@ -23,7 +23,7 @@ const Email2FA = () => {
         if (role === 'admin') {
           navigate('/admin-dashboard');
         } else if (role === 'general_user') {
-          navigate('/landing');
+          navigate('/user-dashboard');
         } else {
           navigate('/login');
         }
