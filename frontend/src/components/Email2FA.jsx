@@ -5,17 +5,19 @@ import { useNavigate, useLocation } from 'react-router-dom';
 const Email2FA = () => {
   const [code, setCode] = useState('');
   const [message, setMessage] = useState('');
+  const [resending, setResending] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const user_id = location.state?.user_id;
   const initialRole = location.state?.role;
+  //const username = location.state?.username; // If you have username from login
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage('');
     try {
       const res = await axios.post('http://127.0.0.1:8000/api/verify-2fa/', { code, user_id });
-      const role = res.data.role || initialRole; // Use backend response or initial role
+      const role = res.data.role || initialRole;
       setMessage('2FA successful! Redirecting...');
       setTimeout(() => {
         if (role === 'admin') {
@@ -23,12 +25,25 @@ const Email2FA = () => {
         } else if (role === 'general_user') {
           navigate('/landing');
         } else {
-          navigate('/login'); // fallback for unknown role
+          navigate('/login');
         }
       }, 1500);
     } catch (err) {
       setMessage('Error: ' + (err.response?.data?.detail || err.message));
     }
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    setMessage('');
+    try {
+      // You may need to POST username/password or user_id depending on your backend
+      await axios.post('http://127.0.0.1:8000/api/resend-2fa/', { user_id });
+      setMessage('A new 2FA code has been sent to your email.');
+    } catch (err) {
+      setMessage('Error resending code: ' + (err.response?.data?.detail || err.message));
+    }
+    setResending(false);
   };
 
   return (
@@ -47,6 +62,13 @@ const Email2FA = () => {
           />
           <button style={{width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '16px', cursor: 'pointer', marginTop: '10px'}} type="submit">Verify</button>
         </form>
+        <button
+          style={{width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: '#6c757d', color: '#fff', fontWeight: 'bold', fontSize: '16px', cursor: 'pointer', marginTop: '10px'}}
+          onClick={handleResend}
+          disabled={resending}
+        >
+          {resending ? 'Resending...' : 'Resend 2FA Code'}
+        </button>
         {message && <p style={{textAlign: 'center', color: message.startsWith('Error') ? 'red' : 'green'}}>{message}</p>}
       </div>
     </div>
