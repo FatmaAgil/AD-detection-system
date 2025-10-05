@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework import generics
 from django.contrib.auth.models import User
-from .serializers import UserSerializer
+from .serializers import UserSerializer, ContactMessageSerializer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
-from .models import Email2FACode
+from .models import Email2FACode, ContactMessage
 import random
 from django.core.mail import send_mail
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
@@ -118,6 +118,10 @@ class UserListCreateView(generics.ListCreateAPIView):
 class UserRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+
+class ContactMessageListCreateView(generics.ListCreateAPIView):
+    queryset = ContactMessage.objects.all().order_by('-created_at')
+    serializer_class = ContactMessageSerializer
 
 
 

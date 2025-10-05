@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import {  Bell, User, Camera, MessageSquare } from "lucide-react";
+import { Camera, MessageSquare } from "lucide-react";
 import UserSidebar from "./UserSidebar";
+import UserNavbar from "./UserNavbar";
 
 // Sidebar navigation items
 /*const nav = [
@@ -49,7 +50,7 @@ export default function UserDashboard() {
       {/* Sidebar */}
       <UserSidebar collapsed={collapsed} setCollapsed={setCollapsed} />
 
-      {/* Main layout (header + content) */}
+      {/* Main layout (navbar + content) */}
       <div
         style={{
           flex: 1,
@@ -58,50 +59,11 @@ export default function UserDashboard() {
           minHeight: "100vh",
           display: "flex",
           flexDirection: "column",
+          paddingTop: 72, // Add this line
         }}
       >
-        {/* Header */}
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "24px 40px 24px 40px",
-            background: "#fff",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.03)",
-            position: "sticky",
-            top: 0,
-            zIndex: 5,
-          }}
-        >
-          <div>
-            
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
-            <button style={{ position: "relative", background: "none", border: "none", cursor: "pointer" }}>
-              <Bell />
-              <span
-                style={{
-                  position: "absolute",
-                  top: -6,
-                  right: -8,
-                  background: "#ef4444",
-                  color: "#fff",
-                  fontSize: 12,
-                  borderRadius: "50%",
-                  padding: "2px 6px",
-                  fontWeight: "bold",
-                }}
-              >
-                1
-              </span>
-            </button>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <User />
-              <span style={{ fontSize: 16 }}>Sarah</span>
-            </div>
-          </div>
-        </header>
+        {/* Navbar */}
+        <UserNavbar sidebarWidth={sidebarWidth} />
 
         {/* Main content */}
         <main style={{ padding: 32, flex: 1 }}>

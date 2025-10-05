@@ -9,7 +9,9 @@ import Email2FA from './components/Email2FA';
 import AdminDashboard from './components/AdminDashboard';
 import UserDashboard from './components/UserDashboard';
 import UserManagement from './components/UserManagement';
-
+import Contact from './components/UserContact';
+import AdminMessages
+ from './components/AdminMessages';
 function App() {
   return (
     <Router>
@@ -24,6 +26,8 @@ function App() {
         <Route path="/users" element={<UserManagement />} />
         <Route path="*" element={<Navigate to="/login" />} />
         <Route path="/user-dashboard" element={<UserDashboard />} />
+        <Route path="/contact" element={<Contact />} />
+        <Route path="/admin-messages" element={<AdminMessages />} />
       </Routes>
     </Router>
   );

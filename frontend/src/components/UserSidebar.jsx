@@ -3,7 +3,7 @@ import { Camera, Home, MessageSquare, Phone, User } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
 const nav = [
-	{ name: "Dashboard", path: "/dashboard", icon: Home },
+	{ name: "Dashboard", path: "/user-dashboard", icon: Home },
 	{ name: "AD Scan", path: "/scan", icon: Camera },
 	{ name: "Chat History", path: "/chat", icon: MessageSquare },
 	{ name: "Contact", path: "/contact", icon: Phone },
