@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
-from .models import ContactMessage
+from .models import ContactMessage, MessageReply
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, validators=[validate_password])
@@ -36,7 +36,18 @@ class UserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+class MessageReplySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MessageReply
+        fields = ['id', 'reply_text', 'admin', 'message', 'created_at']
+        extra_kwargs = {
+            'admin': {'required': False},
+            'message': {'required': False},
+        }
+
 class ContactMessageSerializer(serializers.ModelSerializer):
+    replies = MessageReplySerializer(many=True, read_only=True)
+
     class Meta:
         model = ContactMessage
-        fields = "__all__"
+        fields = ['id', 'name', 'email', 'message', 'created_at', 'replies']
