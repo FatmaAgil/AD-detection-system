@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom"; // Add this import
 import { Camera, MessageSquare } from "lucide-react";
 import UserSidebar from "./UserSidebar";
 import UserNavbar from "./UserNavbar";
@@ -44,6 +45,10 @@ const COLORS = {
 export default function UserDashboard() {
   const [collapsed, setCollapsed] = useState(false);
   const sidebarWidth = collapsed ? 60 : 220;
+  const navigate = useNavigate();
+
+  // Get username from localStorage (set this after login/2FA)
+  const username = localStorage.getItem("username") || "User";
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.background, display: "flex" }}>
@@ -77,7 +82,9 @@ export default function UserDashboard() {
               color: "#fff",
             }}
           >
-            <h2 style={{ fontSize: 28, fontWeight: "bold", margin: 0 }}>Welcome, Sarah Johnson</h2>
+            <h2 style={{ fontSize: 28, fontWeight: "bold", margin: 0 }}>
+              Welcome, {username}
+            </h2>
             <p style={{ margin: "12px 0 20px" }}>Your atopic dermatitis detection dashboard</p>
             <div style={{ display: "flex", gap: 16 }}>
               <button
@@ -92,6 +99,7 @@ export default function UserDashboard() {
                   boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
                   cursor: "pointer",
                 }}
+                onClick={() => navigate("/scan")} // <-- Go to AD Scan page
               >
                 New Scan
               </button>
@@ -106,6 +114,7 @@ export default function UserDashboard() {
                   boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
                   cursor: "pointer",
                 }}
+                onClick={() => navigate("/chat")} // <-- Go to Chat History page
               >
                 View History
               </button>

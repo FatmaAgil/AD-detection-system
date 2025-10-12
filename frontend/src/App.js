@@ -13,6 +13,7 @@ import Contact from './components/UserContact';
 import AdminMessages from './components/AdminMessages';
 import UserProfile from './components/UserProfile';
 import AdScan from './components/AdScan';
+import ChatHistory from './components/ChatHistory';
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
         <Route path="/admin-dashboard" element={<AdminDashboard />} />
         <Route path="/users" element={<UserManagement />} />
         <Route path="/scan" element={<AdScan />} />
+        <Route path="/chat" element={<ChatHistory />} />
         <Route path="*" element={<Navigate to="/login" />} />
         <Route path="/user-dashboard" element={<UserDashboard />} />
         <Route path="/contact" element={<Contact />} />
