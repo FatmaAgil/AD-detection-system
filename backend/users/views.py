@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework import generics
 from django.contrib.auth.models import User
-from .serializers import UserSerializer, ContactMessageSerializer
+from .serializers import UserSerializer, ContactMessageSerializer, MessageReplySerializer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -10,10 +10,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
-from .models import Email2FACode, ContactMessage
+from .models import Email2FACode, ContactMessage, MessageReply
 import random
 from django.core.mail import send_mail
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
+from rest_framework_simplejwt.tokens import RefreshToken
 
 # Create your views here.
 
@@ -66,7 +67,13 @@ class Verify2FAView(APIView):
             code_obj = Email2FACode.objects.filter(user=user, code=code).order_by('-created_at').first()
             if code_obj:
                 Email2FACode.objects.filter(user=user).delete()
-                return Response({'message': '2FA verified!', 'role': user.profile.role}, status=status.HTTP_200_OK)
+                tokens = get_tokens_for_user(user)  # <-- Generate JWT tokens
+                return Response({
+                    'message': '2FA verified!',
+                    'role': user.profile.role,
+                    'access': tokens['access'],
+                    'refresh': tokens['refresh'],
+                }, status=status.HTTP_200_OK)
             else:
                 return Response({'detail': 'Invalid code'}, status=status.HTTP_400_BAD_REQUEST)
         except User.DoesNotExist:
@@ -122,6 +129,44 @@ class UserRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 class ContactMessageListCreateView(generics.ListCreateAPIView):
     queryset = ContactMessage.objects.all().order_by('-created_at')
     serializer_class = ContactMessageSerializer
+
+class MessageReplyListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        # Optionally, check for admin:
+        # if not request.user.is_staff:
+        #     return Response({"detail": "Admins only."}, status=403)
+        serializer = MessageReplySerializer(data={
+            'message': pk,
+            'admin': request.user.id,
+            'reply_text': request.data.get('reply_text')
+        })
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+class ContactMessageUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = ContactMessage.objects.all()
+    serializer_class = ContactMessageSerializer
+    permission_classes = [IsAuthenticated]
+
+class MessageReplyUpdateView(generics.RetrieveUpdateAPIView):
+    queryset = MessageReply.objects.all()
+    serializer_class = MessageReplySerializer
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+def get_tokens_for_user(user):
+    refresh = RefreshToken.for_user(user)
+    return {
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+    }
 
 
 

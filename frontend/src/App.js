@@ -10,8 +10,8 @@ import AdminDashboard from './components/AdminDashboard';
 import UserDashboard from './components/UserDashboard';
 import UserManagement from './components/UserManagement';
 import Contact from './components/UserContact';
-import AdminMessages
- from './components/AdminMessages';
+import AdminMessages from './components/AdminMessages';
+import UserProfile from './components/UserProfile';
 function App() {
   return (
     <Router>
@@ -28,6 +28,7 @@ function App() {
         <Route path="/user-dashboard" element={<UserDashboard />} />
         <Route path="/contact" element={<Contact />} />
         <Route path="/admin-messages" element={<AdminMessages />} />
+        <Route path="/profile" element={<UserProfile />} />
       </Routes>
     </Router>
   );

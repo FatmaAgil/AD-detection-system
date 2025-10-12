@@ -17,6 +17,10 @@ const Email2FA = () => {
     setMessage('');
     try {
       const res = await axios.post('http://127.0.0.1:8000/api/verify-2fa/', { code, user_id });
+      // Save tokens to localStorage
+      localStorage.setItem("access_token", res.data.access);
+      localStorage.setItem("refresh_token", res.data.refresh);
+
       const role = res.data.role || initialRole;
       setMessage('2FA successful! Redirecting...');
       setTimeout(() => {

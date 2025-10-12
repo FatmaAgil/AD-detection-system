@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import RegisterView, LoginView, Verify2FAView, CreateAdminView, Resend2FAView, ContactMessageListCreateView
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import UserListCreateView, UserRetrieveUpdateDestroyView
+from .views import UserListCreateView, UserRetrieveUpdateDestroyView, MessageReplyListCreateView, ContactMessageUpdateDeleteView, MessageReplyUpdateView
 
 urlpatterns = [
     path("register/", RegisterView.as_view(), name="register"),
@@ -13,4 +13,7 @@ urlpatterns = [
     path('users/', UserListCreateView.as_view(), name='user-list-create'),
     path('users/<int:pk>/', UserRetrieveUpdateDestroyView.as_view(), name='user-detail'),
     path('messages/', ContactMessageListCreateView.as_view(), name='contact-messages'),
+    path('messages/<int:pk>/reply/', MessageReplyListCreateView.as_view(), name='message-reply'),
+    path('messages/<int:pk>/', ContactMessageUpdateDeleteView.as_view(), name='message-edit-delete'),
+    path('replies/<int:pk>/', MessageReplyUpdateView.as_view(), name='reply-update'),
 ]
