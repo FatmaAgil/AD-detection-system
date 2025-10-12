@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework import generics
 from django.contrib.auth.models import User
-from .serializers import UserSerializer, ContactMessageSerializer, MessageReplySerializer
+from .serializers import UserSerializer, ContactMessageSerializer, MessageReplySerializer, AdScanImageSerializer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -15,6 +15,7 @@ import random
 from django.core.mail import send_mail
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.parsers import MultiPartParser, FormParser
 
 # Create your views here.
 
@@ -160,6 +161,46 @@ class MessageReplyUpdateView(generics.RetrieveUpdateAPIView):
     def put(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
+
+class UserProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
+
+    def put(self, request):
+        serializer = UserSerializer(request.user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+class UserContactMessagesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        messages = ContactMessage.objects.filter(email=request.user.email).order_by('-created_at')
+        serializer = ContactMessageSerializer(messages, many=True)
+        return Response(serializer.data)
+
+class AdScanImageUploadView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        images = request.FILES.getlist('images')
+        if len(images) > 10:
+            return Response({"error": "You can upload up to 10 images."}, status=400)
+        saved = []
+        for img in images:
+            serializer = AdScanImageSerializer(data={'image': img})
+            if serializer.is_valid():
+                serializer.save(user=request.user)
+                saved.append(serializer.data)
+            else:
+                return Response(serializer.errors, status=400)
+        return Response({"uploaded": saved}, status=201)
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)

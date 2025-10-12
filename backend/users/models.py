@@ -42,3 +42,8 @@ class MessageReply(models.Model):
     admin = models.ForeignKey(User, on_delete=models.CASCADE)
     reply_text = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+class AdScanImage(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    image = models.ImageField(upload_to='adscan_images/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
