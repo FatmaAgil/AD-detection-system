@@ -14,6 +14,7 @@ const cardStyle = {
 
 const inputStyle = {
   width: '100%',
+  boxSizing: 'border-box',
   padding: '12px',
   margin: '10px 0',
   borderRadius: '8px',

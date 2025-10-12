@@ -17,10 +17,7 @@ const navItems = [
   { to: "/users", label: "User Management", icon: <Users size={20} /> },
   { to: "/admin-messages", label: "Messages", icon: <Mail size={20} /> }, // <-- Use Mail icon for Messages
   { to: "/content", label: "Content", icon: <FileText size={20} /> },
-  { to: "/analysis", label: "Analysis", icon: <Image size={20} /> },
   { to: "/analytics", label: "Analytics", icon: <BarChart3 size={20} /> },
-  { to: "/health", label: "Health", icon: <Activity size={20} /> },
-  { to: "/settings", label: "Settings", icon: <Settings size={20} /> },
 ];
 
 export default function AdminSidebar({ collapsed, setCollapsed }) {

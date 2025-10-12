@@ -56,7 +56,12 @@ class LoginView(APIView):
                 from .models import Profile
                 Profile.objects.create(user=user)
             role = user.profile.role
-            return Response({'message': '2FA code sent to your email.', 'user_id': user.id, 'role': role}, status=status.HTTP_200_OK)
+            return Response({
+                'message': '2FA code sent to your email.',
+                'user_id': user.id,
+                'role': role,
+                'username': user.username,  # <-- Add this line
+            }, status=status.HTTP_200_OK)
         return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
 
 class Verify2FAView(APIView):
@@ -68,12 +73,13 @@ class Verify2FAView(APIView):
             code_obj = Email2FACode.objects.filter(user=user, code=code).order_by('-created_at').first()
             if code_obj:
                 Email2FACode.objects.filter(user=user).delete()
-                tokens = get_tokens_for_user(user)  # <-- Generate JWT tokens
+                tokens = get_tokens_for_user(user)
                 return Response({
                     'message': '2FA verified!',
                     'role': user.profile.role,
                     'access': tokens['access'],
                     'refresh': tokens['refresh'],
+                    'username': user.username,  # <-- Add this line
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({'detail': 'Invalid code'}, status=status.HTTP_400_BAD_REQUEST)

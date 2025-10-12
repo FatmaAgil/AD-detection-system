@@ -20,7 +20,7 @@ const Email2FA = () => {
       // Save tokens to localStorage
       localStorage.setItem("access_token", res.data.access);
       localStorage.setItem("refresh_token", res.data.refresh);
-
+      localStorage.setItem("username", res.data.username);
       const role = res.data.role || initialRole;
       setMessage('2FA successful! Redirecting...');
       setTimeout(() => {
@@ -56,7 +56,7 @@ const Email2FA = () => {
         <h2 style={{textAlign: 'center', marginBottom: '24px'}}>Enter 2FA Code</h2>
         <form onSubmit={handleSubmit}>
           <input
-            style={{width: '100%', padding: '12px', margin: '10px 0', borderRadius: '8px', border: '1px solid #ccc', fontSize: '16px'}}
+            style={{width: '100%', boxSizing: 'border-box', padding: '12px', margin: '10px 0', borderRadius: '8px', border: '1px solid #ccc', fontSize: '16px'}}
             type="text"
             name="code"
             placeholder="Enter code from email"
