@@ -161,3 +161,5 @@ REST_FRAMEWORK = {
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+MODEL_PATH = BASE_DIR / 'ad_models' / 'mobilenetv2_ad_detection.keras'

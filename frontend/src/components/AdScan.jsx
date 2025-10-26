@@ -6,6 +6,7 @@ export default function AdScan() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const sidebarWidth = sidebarCollapsed ? 60 : 220;
   const [images, setImages] = useState([]);
+  const [results, setResults] = useState([]); // <-- new
 
   // Section 1: Upload Images
   const handleImageUpload = async (e) => {
@@ -26,11 +27,12 @@ export default function AdScan() {
 
     if (res.ok) {
       const data = await res.json();
-      // Optionally show uploaded images or success message
-      alert("Images uploaded successfully!");
+      // set results from backend predictions
+      setResults(data.results || []);
+      alert("Images uploaded and analyzed successfully!");
     } else {
-      const error = await res.json();
-      alert(error.error || "Upload failed.");
+      const error = await res.json().catch(() => ({}));
+      alert(error.error || error.detail || "Upload failed.");
     }
   };
 
@@ -81,7 +83,7 @@ export default function AdScan() {
           )}
         </div>
 
-        {/* Section 2: Result Section (Dummy) */}
+        {/* Section 2: Result Section - show model results */}
         <div style={{
           maxWidth: 700,
           width: "100%",
@@ -91,10 +93,33 @@ export default function AdScan() {
           padding: 32,
         }}>
           <h2 style={{ color: "#1e90e8", marginBottom: 12 }}>2. Scan Result</h2>
-          <div style={{ fontSize: 17, color: "#64748b" }}>
-            {/* Dummy data */}
-            Scan complete. Detected: Example AD features.
-          </div>
+
+          {results.length === 0 ? (
+            <div style={{ fontSize: 17, color: "#64748b" }}>
+              No scans yet. Upload images to analyze.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {results.map((r, i) => {
+                const localImg = images[i] ? URL.createObjectURL(images[i]) : (r.uploaded.image || null);
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {localImg && (
+                      <img src={localImg} alt={`res-${i}`} style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8, border: "1px solid #eee" }} />
+                    )}
+                    <div>
+                      <div style={{ fontWeight: 600, color: r.prediction.label === 'ad' ? '#d9534f' : '#2f855a' }}>
+                        {r.prediction.label.toUpperCase()}
+                      </div>
+                      <div style={{ fontSize: 13, color: "#64748b" }}>
+                        Confidence: {(r.prediction.score * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Section 3: Chat Section (Dummy) */}

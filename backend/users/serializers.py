@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from .models import ContactMessage, MessageReply, AdScanImage
+from django.conf import settings
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, validators=[validate_password])
@@ -59,3 +60,30 @@ class AdScanImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdScanImage
         fields = ['id', 'image', 'uploaded_at']
+
+class AdScanSerializer(serializers.Serializer):
+    """
+    Simple serializer for image uploads used by the ad-scan API.
+
+    Validations:
+    - file type limited to jpeg/jpg/png
+    - configurable max size via settings.ADSCAN_MAX_UPLOAD_BYTES (defaults to 5 MB)
+    """
+    image = serializers.ImageField()
+
+    def validate_image(self, value):
+        # max size (bytes)
+        max_bytes = getattr(settings, 'ADSCAN_MAX_UPLOAD_BYTES', 5 * 1024 * 1024)
+        if value.size > max_bytes:
+            mb = max_bytes // (1024 * 1024)
+            raise serializers.ValidationError(f'Image too large. Max size is {mb} MB.')
+
+        # content type check (some file storages may not set content_type)
+        content_type = getattr(value, 'content_type', None)
+        if content_type:
+            main, _, sub = content_type.partition('/')
+            allowed = {'jpeg', 'jpg', 'png'}
+            if main != 'image' or sub.lower() not in allowed:
+                raise serializers.ValidationError('Invalid image type. Allowed types: jpeg, png.')
+
+        return value

@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework import generics
 from django.contrib.auth.models import User
-from .serializers import UserSerializer, ContactMessageSerializer, MessageReplySerializer, AdScanImageSerializer
+from .serializers import UserSerializer, ContactMessageSerializer, MessageReplySerializer, AdScanImageSerializer, AdScanSerializer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -16,8 +16,73 @@ from django.core.mail import send_mail
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework_simplejwt.authentication import JWTAuthentication
+import logging
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated  # or AllowAny for public
+
+# new imports for model connection and prediction
+from django.conf import settings
+from tensorflow.keras.models import load_model
+from PIL import Image
+import numpy as np
 
 # Create your views here.
+
+# Model loader + prediction helper (loads model once)
+_ad_model = None
+
+def get_ad_model():
+    global _ad_model
+    if _ad_model is None:
+        model_path = getattr(settings, 'MODEL_PATH', None)
+        if not model_path:
+            raise RuntimeError("MODEL_PATH not configured in settings.")
+        _ad_model = load_model(str(model_path))
+    return _ad_model
+
+def predict_ad(image_file):
+    """
+    image_file: file-like (InMemoryUploadedFile)
+    returns: dict { 'label': 'ad'|'no_ad', 'score': float }
+    """
+    model = get_ad_model()
+    # infer target size from model.input_shape if possible
+    target_size = (224, 224)
+    try:
+        inp_shape = model.input_shape  # e.g. (None, height, width, channels)
+        if isinstance(inp_shape, (list, tuple)):
+            # handle either (None, H, W, C) or (H, W, C)
+            if len(inp_shape) == 4:
+                _, h, w, _ = inp_shape
+                target_size = (w or 224, h or 224)
+            elif len(inp_shape) == 3:
+                h, w, _ = inp_shape
+                target_size = (w or 224, h or 224)
+    except Exception:
+        target_size = (224, 224)
+
+    img = Image.open(image_file).convert('RGB').resize(target_size)
+    x = np.array(img).astype('float32') / 255.0
+    x = np.expand_dims(x, 0)
+
+    preds = model.predict(x)
+    preds = np.array(preds).squeeze()
+
+    # normalize prediction interpretation:
+    if preds.ndim == 0:
+        score = float(preds)
+    elif preds.size == 1:
+        score = float(preds.item())
+    elif preds.size == 2:
+        # assume binary-class probabilities [no_ad_prob, ad_prob]
+        score = float(preds[1])
+    else:
+        # multiclass: take max probability
+        score = float(np.max(preds))
+
+    label = 'ad' if score >= 0.5 else 'no_ad'
+    return {'label': label, 'score': score}
 
 # Signup API
 class RegisterView(APIView):
@@ -192,21 +257,79 @@ class UserContactMessagesView(APIView):
 
 class AdScanImageUploadView(APIView):
     parser_classes = [MultiPartParser, FormParser]
-    permission_classes = [IsAuthenticated]
+    # for testing set AllowAny; change back to IsAuthenticated once verified
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
 
     def post(self, request):
+        logger = logging.getLogger(__name__)
+        logger.debug("AdScan upload - FILES: %s", request.FILES)
+        logger.debug("AdScan upload - DATA: %s", request.data)
+
+        # accept multiple files under 'images' or a single file under 'image'
         images = request.FILES.getlist('images')
-        if len(images) > 10:
-            return Response({"error": "You can upload up to 10 images."}, status=400)
-        saved = []
-        for img in images:
-            serializer = AdScanImageSerializer(data={'image': img})
-            if serializer.is_valid():
-                serializer.save(user=request.user)
-                saved.append(serializer.data)
+        if not images:
+            single = request.FILES.get('image')
+            if single:
+                images = [single]
             else:
-                return Response(serializer.errors, status=400)
-        return Response({"uploaded": saved}, status=201)
+                return Response(
+                    {"error": "No images uploaded. Use form field 'images' (multiple) or 'image' (single)."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        results = []
+        for img in images:
+            # validate with AdScanSerializer
+            ad_check = AdScanSerializer(data={'image': img})
+            if not ad_check.is_valid():
+                return Response({"error": "Invalid image", "details": ad_check.errors},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # save to AdScanImage (if desired)
+            img_serializer = AdScanImageSerializer(data={'image': img})
+            if not img_serializer.is_valid():
+                return Response({"error": "Failed to save image", "details": img_serializer.errors},
+                                status=status.HTTP_400_BAD_REQUEST)
+            try:
+                # attach user if serializer/model accepts it; otherwise save without user
+                try:
+                    instance = img_serializer.save(user=request.user)
+                except TypeError:
+                    instance = img_serializer.save()
+            except Exception as e:
+                logger.exception("Saving image failed")
+                return Response({"error": "Saving image failed", "details": str(e)},
+                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # run prediction
+            try:
+                prediction = predict_ad(img)  # file-like object
+            except Exception as e:
+                logger.exception("Prediction error")
+                return Response({"error": "Prediction failed", "details": str(e)},
+                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            results.append({"uploaded": img_serializer.data, "prediction": prediction})
+
+        return Response({"results": results}, status=status.HTTP_201_CREATED)
+
+# Add an API view that accepts one image and returns prediction
+class AdScanAPIView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+    permission_classes = [IsAuthenticated]  # change to AllowAny if you want public access
+
+    def post(self, request):
+        serializer = AdScanSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        image = serializer.validated_data['image']
+        try:
+            result = predict_ad(image)
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
@@ -214,6 +337,16 @@ def get_tokens_for_user(user):
         'refresh': str(refresh),
         'access': str(refresh.access_token),
     }
+
+# Admin dashboard stats view
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_stats(request):
+    """
+    Return minimal stats for admin dashboard.
+    """
+    user_count = User.objects.count()
+    return Response({"user_count": user_count})
 
 
 
