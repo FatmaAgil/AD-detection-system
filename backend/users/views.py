@@ -18,6 +18,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import logging
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated  # or AllowAny for public
 
 # new imports for model connection and prediction
 from django.conf import settings
@@ -335,6 +337,16 @@ def get_tokens_for_user(user):
         'refresh': str(refresh),
         'access': str(refresh.access_token),
     }
+
+# Admin dashboard stats view
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_stats(request):
+    """
+    Return minimal stats for admin dashboard.
+    """
+    user_count = User.objects.count()
+    return Response({"user_count": user_count})
 
 
 

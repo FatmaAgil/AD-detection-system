@@ -11,14 +11,7 @@ import {
 } from "lucide-react";
 
 // Dashboard Overview content
-function DashboardOverview() {
-  const stats = [
-    { label: "Total Users", value: 1240, change: "+5%", desc: "Healthcare workers & patients", icon: <Users color="var(--color-primary)" size={28} /> },
-    { label: "Images Analyzed", value: 3421, change: "+8%", desc: "Skin images processed", icon: <ImageIcon color="var(--color-primary)" size={28} /> },
-    { label: "AD Cases Detected", value: 287, change: "+2%", desc: "Positive detections", icon: <Activity color="var(--color-primary)" size={28} /> },
-    { label: "Pending Reviews", value: 19, change: "-1%", desc: "Cases needing review", icon: <FileText color="var(--color-primary)" size={28} /> },
-  ];
-
+function DashboardOverview({ stats }) {
   return (
     <div>
       <section className="medical-gradient" style={{ borderRadius: 16, padding: 32, marginBottom: 32 }}>
@@ -86,7 +79,34 @@ export default function AdminDashboard() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showHeader, setShowHeader] = useState(true);
   const lastScrollY = useRef(window.scrollY);
- // const navigate = useNavigate();
+
+  // dynamic stats
+  const [stats, setStats] = useState([
+    { key: "users", label: "Total Users", value: 0, change: "+0%", desc: "Admins & general users", icon: <Users color="var(--color-primary)" size={28} /> },
+    { key: "images", label: "Images Analyzed", value: 3421, change: "+8%", desc: "Skin images processed", icon: <ImageIcon color="var(--color-primary)" size={28} /> },
+    { key: "ad_cases", label: "AD Cases Detected", value: 287, change: "+2%", desc: "Positive detections", icon: <Activity color="var(--color-primary)" size={28} /> },
+    { key: "pending", label: "Pending Reviews", value: 19, change: "-1%", desc: "Cases needing review", icon: <FileText color="var(--color-primary)" size={28} /> },
+  ]);
+
+  useEffect(() => {
+    // fetch admin stats once on mount
+    async function fetchStats() {
+      try {
+        const token = localStorage.getItem("access_token"); // adjust if you store tokens elsewhere
+        const res = await fetch("http://localhost:8000/api/admin/stats/", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (typeof data.user_count === "number") {
+          setStats((s) => s.map(st => st.key === "users" ? { ...st, value: data.user_count } : st));
+        }
+      } catch (err) {
+        console.error("Failed to load admin stats", err);
+      }
+    }
+    fetchStats();
+  }, []);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -108,8 +128,6 @@ export default function AdminDashboard() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
- 
-
   return (
     <div>
       <AdminSidebar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} />
@@ -129,7 +147,7 @@ export default function AdminDashboard() {
         />
         <main style={{ padding: 32 }}>
           <Routes>
-            <Route path="/" element={<DashboardOverview />} />
+            <Route path="/" element={<DashboardOverview stats={stats} />} />
             <Route path="/users" element={<Placeholder title="User Management" />} />
             <Route path="/admins" element={<Placeholder title="Admin Management" />} />
             <Route path="/content" element={<Placeholder title="Content Management" />} />
