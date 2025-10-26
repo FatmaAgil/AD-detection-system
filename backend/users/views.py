@@ -348,5 +348,43 @@ def admin_stats(request):
     user_count = User.objects.count()
     return Response({"user_count": user_count})
 
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def chat_view(request):
+    """
+    Simple chat endpoint used by frontend.
+    Expected payload:
+      {
+        "user_input": "...",
+        "previous_state": [...],
+        "model_result": [...]
+      }
+    Returns: { "reply": "..." }
+    """
+    data = request.data or {}
+    user_input = (data.get("user_input") or "").strip()
+    model_result = data.get("model_result") or []
+
+    # Build a short summary from model_result if available
+    try:
+        total = len(model_result)
+        ad_count = sum(1 for r in model_result if (r.get("prediction") or {}).get("label") == "ad")
+    except Exception:
+        total = 0
+        ad_count = 0
+
+    if total > 0:
+        summary = f"{ad_count} of {total} uploaded image{'s' if total != 1 else ''} show signs of Atopic Dermatitis."
+    else:
+        summary = "No model results provided."
+
+    # Simple rule-based reply
+    if user_input:
+        reply = f"I received your message: \"{user_input}\". Current scan summary: {summary}"
+    else:
+        reply = f"Hello — {summary}"
+
+    return Response({"reply": reply}, status=status.HTTP_200_OK)
+
 
 
