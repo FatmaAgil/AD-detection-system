@@ -18,11 +18,16 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from users.views import chat_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-     path("api/", include("users.urls")),
-      path('api/password_reset/', include('django_rest_passwordreset.urls', namespace='password_reset')),
+    path("api/", include("users.urls")),
+    path('api/password_reset/', include('django_rest_passwordreset.urls', namespace='password_reset')),
+    # direct mapping for frontend: /api/adscan/chat/
+    path("api/adscan/chat/", chat_view, name="adscan-chat"),
+    # remove or comment out include("adscan.urls") until you add the adscan app
+    # path("api/adscan/", include("adscan.urls")),
 ]
 
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

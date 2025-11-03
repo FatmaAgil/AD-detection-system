@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import UserSidebar from "./UserSidebar";
 import UserNavbar from "./UserNavbar";
+import { loadChats } from "../utils/chatStorage"; // added import
 
 const dummyChats = [
   {
@@ -27,6 +28,18 @@ export default function ChatHistory() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const sidebarWidth = sidebarCollapsed ? 60 : 220;
 
+  const [chats, setChats] = useState(() => {
+    const stored = loadChats();
+    return stored.length ? stored : dummyChats;
+  });
+
+  useEffect(() => {
+    // keep simple: reload on mount; user can click Refresh to re-read
+    const onStorage = () => setChats(loadChats());
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   // Download chat as text file
   const handleDownload = (chat) => {
     const content = chat.messages
@@ -39,6 +52,11 @@ export default function ChatHistory() {
     a.download = `chat_${chat.id}.txt`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const refreshFromStorage = () => {
+    const stored = loadChats();
+    setChats(stored.length ? stored : []);
   };
 
   return (
@@ -66,11 +84,14 @@ export default function ChatHistory() {
           padding: 32,
         }}>
           <h2 style={{ color: "#1e90e8", marginBottom: 24 }}>Chat History</h2>
-          {dummyChats.length === 0 ? (
+          <div style={{ marginBottom: 12 }}>
+            <button onClick={refreshFromStorage} style={{ marginRight: 8 }}>Refresh</button>
+          </div>
+          {chats.length === 0 ? (
             <div style={{ color: "#aaa", fontSize: 16 }}>No chat history found.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
-              {dummyChats.map((chat) => (
+              {chats.map((chat) => (
                 <div key={chat.id} style={{
                   background: "#f7fafd",
                   borderRadius: 12,
