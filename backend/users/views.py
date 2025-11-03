@@ -23,7 +23,8 @@ from rest_framework.permissions import IsAuthenticated  # or AllowAny for public
 
 # new imports for model connection and prediction
 from django.conf import settings
-from tensorflow.keras.models import load_model
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input #type: ignore
+from tensorflow.keras.models import load_model #type: ignore
 from PIL import Image
 import numpy as np
 
@@ -47,42 +48,24 @@ def predict_ad(image_file):
     returns: dict { 'label': 'ad'|'no_ad', 'score': float }
     """
     model = get_ad_model()
-    # infer target size from model.input_shape if possible
-    target_size = (224, 224)
-    try:
-        inp_shape = model.input_shape  # e.g. (None, height, width, channels)
-        if isinstance(inp_shape, (list, tuple)):
-            # handle either (None, H, W, C) or (H, W, C)
-            if len(inp_shape) == 4:
-                _, h, w, _ = inp_shape
-                target_size = (w or 224, h or 224)
-            elif len(inp_shape) == 3:
-                h, w, _ = inp_shape
-                target_size = (w or 224, h or 224)
-    except Exception:
-        target_size = (224, 224)
+    target_size = (180, 180)  # match your training size exactly
 
+    # Load and preprocess image
     img = Image.open(image_file).convert('RGB').resize(target_size)
-    x = np.array(img).astype('float32') / 255.0
+    x = np.array(img).astype('float32')
     x = np.expand_dims(x, 0)
+    x = preprocess_input(x)  # ✅ SAME preprocessing used during training
 
+    # Predict
     preds = model.predict(x)
     preds = np.array(preds).squeeze()
 
-    # normalize prediction interpretation:
-    if preds.ndim == 0:
-        score = float(preds)
-    elif preds.size == 1:
-        score = float(preds.item())
-    elif preds.size == 2:
-        # assume binary-class probabilities [no_ad_prob, ad_prob]
-        score = float(preds[1])
-    else:
-        # multiclass: take max probability
-        score = float(np.max(preds))
-
+    # Since output layer = Dense(1, activation='sigmoid')
+    score = float(preds) if np.ndim(preds) == 0 else float(preds.item())
     label = 'ad' if score >= 0.5 else 'no_ad'
+
     return {'label': label, 'score': score}
+
 
 # Signup API
 class RegisterView(APIView):
@@ -348,43 +331,95 @@ def admin_stats(request):
     user_count = User.objects.count()
     return Response({"user_count": user_count})
 
+AD_QUESTIONS = [
+    "Is the affected area itchy?",
+    "Do you notice redness or inflammation?",
+    "Is there any oozing or crusting?",
+    "Does it occur in skin folds (elbows, knees, wrists)?",
+    "Is there a history of eczema or allergies?",
+]
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def chat_view(request):
-    """
-    Simple chat endpoint used by frontend.
-    Expected payload:
-      {
-        "user_input": "...",
-        "previous_state": [...],
-        "model_result": [...]
-      }
-    Returns: { "reply": "..." }
-    """
+    logger = logging.getLogger(__name__)
     data = request.data or {}
     user_input = (data.get("user_input") or "").strip()
+    previous_state = data.get("previous_state") or []
     model_result = data.get("model_result") or []
 
-    # Build a short summary from model_result if available
-    try:
-        total = len(model_result)
-        ad_count = sum(1 for r in model_result if (r.get("prediction") or {}).get("label") == "ad")
-    except Exception:
-        total = 0
-        ad_count = 0
+    # DEBUG: log incoming chat payload (inspect server console)
+    logger.debug("chat_view: user_input=%r", user_input)
+    logger.debug("chat_view: previous_state (len=%d) = %s", len(previous_state), previous_state)
+    logger.debug("chat_view: model_result = %s", model_result)
 
-    if total > 0:
-        summary = f"{ad_count} of {total} uploaded image{'s' if total != 1 else ''} show signs of Atopic Dermatitis."
-    else:
-        summary = "No model results provided."
+    # Summarize scan results
+    total = len(model_result)
+    ad_count = sum(1 for r in model_result if r.get("prediction", {}).get("label") == "ad")
+    summary = (
+        f"{ad_count} of {total} uploaded image{'s' if total != 1 else ''} show signs of Atopic Dermatitis."
+        if total > 0 else "No scan results available."
+    )
 
-    # Simple rule-based reply
-    if user_input:
-        reply = f"I received your message: \"{user_input}\". Current scan summary: {summary}"
-    else:
+    # Robustly pair AI questions with user answers.
+    # Strategy:
+    # 1) Walk previous_state, map each AI question to the next user message (if any).
+    # 2) If no user reply is found in previous_state for the last AI question,
+    #    use the current request's user_input as that answer (handles frontend timing).
+    answers = {}
+    last_ai_question = None
+    # compare questions case-insensitive
+    normalized_questions = [q.strip().lower() for q in AD_QUESTIONS]
+
+    for msg in previous_state:
+        sender = (msg.get("sender") or "").strip().lower()
+        text = (msg.get("text") or "").strip()
+        if sender == "ai" and text.lower() in normalized_questions:
+            last_ai_question = text  # keep original text form as key
+            continue
+        if sender == "user" and last_ai_question:
+            if last_ai_question not in answers and text != "":
+                answers[last_ai_question] = text.lower()
+            last_ai_question = None
+
+    # If the frontend didn't include the latest user reply in previous_state (race),
+    # treat the current user_input as the answer to the most recent AI question.
+    if last_ai_question and last_ai_question not in answers and user_input:
+        answers[last_ai_question] = user_input.lower()
+
+    # Determine next unanswered question (use original AD_QUESTIONS ordering)
+    next_question = None
+    for q in AD_QUESTIONS:
+        if q not in answers:
+            next_question = q
+            break
+
+    # Build AI reply text
+    if not previous_state:
         reply = f"Hello — {summary}"
+    else:
+        reply = f"I received your message: \"{user_input}\". {summary}"
+        if next_question is None:
+            reply += " All questions completed."
 
-    return Response({"reply": reply}, status=status.HTTP_200_OK)
+    # Normalize common affirmative/negative variants
+    def normalize_yes_no(t):
+        if not t:
+            return None
+        v = t.strip().lower()
+        if v in ("yes", "y", "yeah", "yep", "true", "1"):
+            return True
+        if v in ("no", "n", "nope", "nah", "false", "0"):
+            return False
+        return None
 
+    normalized = {q: normalize_yes_no(a) for q, a in answers.items()}
+    total_answered = sum(1 for v in normalized.values() if v is not None)
+    yes_count = sum(1 for v in normalized.values() if v is True)
+    risk_estimate = (yes_count / total_answered) if total_answered > 0 else 0.0
 
-
+    return Response({
+        "reply": reply,
+        "next_question": next_question,
+        "risk_estimate": float(risk_estimate)
+    })

@@ -20,6 +20,14 @@ export default function AdScan() {
   const [userInput, setUserInput] = useState("");
   const [loading, setLoading] = useState(false);
   const chatRef = useRef(null);
+  const chatMessagesRef = useRef(chatMessages);
+
+  // keep a ref copy of chatMessages so sendMessage can build a stable payload
+  useEffect(() => {
+    chatMessagesRef.current = chatMessages;
+  }, [chatMessages]);
+  // live risk estimate from backend (0..1)
+  const [riskEstimate, setRiskEstimate] = useState(null);
 
   const [errors, setErrors] = useState([]); // validation errors
   const [analyzing, setAnalyzing] = useState(false); // scan in progress
@@ -206,13 +214,23 @@ export default function AdScan() {
 
   // send chat message to backend
   const sendMessage = async () => {
+    if (loading) return; // prevent duplicate sends
     const trimmed = userInput.trim();
     if (!trimmed) return;
-    // show user's message immediately
+
     const userMsg = { sender: "user", text: trimmed };
-    setChatMessages((prev) => [...prev, userMsg]);
+
+    // build stable payload from ref (reflects latest chatMessages)
+    const payloadState = [...chatMessagesRef.current, userMsg];
+
+    // optimistically update UI
+    setChatMessages(payloadState);
     setUserInput("");
     setLoading(true);
+
+    // DEBUG: check payload in console / Network tab
+    console.log("Chat send payloadState:", payloadState);
+    console.log("model_result (results):", results);
 
     try {
       const res = await fetch("http://localhost:8000/api/adscan/chat/", {
@@ -223,22 +241,27 @@ export default function AdScan() {
         },
         body: JSON.stringify({
           user_input: trimmed,
-          previous_state: chatMessages,
+          previous_state: payloadState,
           model_result: results,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        const aiReply = data.reply || "No reply from server.";
-        setChatMessages((prev) => [...prev, { sender: "ai", text: aiReply }]);
+        // append server reply(s) once
+        if (data.reply) setChatMessages((cur) => [...cur, { sender: "ai", text: data.reply }]);
+        else setChatMessages((cur) => [...cur, { sender: "ai", text: "No reply from server." }]);
+
+        if (data.next_question) setChatMessages((cur) => [...cur, { sender: "ai", text: data.next_question }]);
+
+        if (data.risk_estimate != null) setRiskEstimate(Number(data.risk_estimate));
       } else {
         const err = await res.json().catch(() => ({}));
         const msg = err.detail || err.error || "Server error";
-        setChatMessages((prev) => [...prev, { sender: "ai", text: `Error: ${msg}` }]);
+        setChatMessages((cur) => [...cur, { sender: "ai", text: `Error: ${msg}` }]);
       }
     } catch (err) {
-      setChatMessages((prev) => [...prev, { sender: "ai", text: `Network error: ${err.message}` }]);
+      setChatMessages((cur) => [...cur, { sender: "ai", text: `Network error: ${err.message}` }]);
     } finally {
       setLoading(false);
     }
@@ -767,7 +790,7 @@ export default function AdScan() {
           </div>
         </div>
 
-        {/* Section 4: Final Result Section (Dummy) */}
+        {/* Section 4: Final Result */}
         <div
           style={{
             maxWidth: 700,
@@ -780,8 +803,28 @@ export default function AdScan() {
         >
           <h2 style={{ color: "#1e90e8", marginBottom: 12 }}>4. Final Result</h2>
           <div style={{ fontSize: 17, color: "#64748b" }}>
-            {/* Dummy data */}
-            Final AD scan result: No suspicious activity detected.
+            {riskEstimate != null ? (
+              <>
+                <div style={{ marginBottom: 8 }}>
+                  Estimated AD probability: <strong>{(riskEstimate * 100).toFixed(0)}%</strong>
+                </div>
+                <div style={{ background: "#e6eef9", borderRadius: 8, height: 12, overflow: "hidden" }}>
+                  <div
+                    style={{
+                      width: `${Math.round(riskEstimate * 100)}%`,
+                      height: "100%",
+                      background: riskEstimate >= 0.5 ? "#d9534f" : "#2f855a",
+                      transition: "width 300ms ease",
+                    }}
+                  />
+                </div>
+                <div style={{ marginTop: 8, color: "#334155", fontSize: 14 }}>
+                  This estimate combines the image analysis and symptom answers. It is not a diagnosis — consult a clinician for confirmation.
+                </div>
+              </>
+            ) : (
+              <div>Final AD scan result: No suspicious activity detected.</div>
+            )}
           </div>
         </div>
 
