@@ -272,18 +272,31 @@ class AdScanImageUploadView(APIView):
                 )
 
         results = []
-        for img in images:
+        errors = []
+        for idx, img in enumerate(images, start=1):
             # validate with AdScanSerializer
             ad_check = AdScanSerializer(data={'image': img})
             if not ad_check.is_valid():
-                return Response({"error": "Invalid image", "details": ad_check.errors},
-                                status=status.HTTP_400_BAD_REQUEST)
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Invalid image",
+                    "details": ad_check.errors
+                })
+                # skip this file, continue with others
+                continue
 
             # save to AdScanImage (if desired)
             img_serializer = AdScanImageSerializer(data={'image': img})
             if not img_serializer.is_valid():
-                return Response({"error": "Failed to save image", "details": img_serializer.errors},
-                                status=status.HTTP_400_BAD_REQUEST)
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Failed to save image",
+                    "details": img_serializer.errors
+                })
+                continue
+
             try:
                 # attach user if serializer/model accepts it; otherwise save without user
                 try:
@@ -292,20 +305,39 @@ class AdScanImageUploadView(APIView):
                     instance = img_serializer.save()
             except Exception as e:
                 logger.exception("Saving image failed")
-                return Response({"error": "Saving image failed", "details": str(e)},
-                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Saving image failed",
+                    "details": str(e)
+                })
+                continue
 
             # run prediction
             try:
                 prediction = predict_ad(img)  # file-like object
             except Exception as e:
                 logger.exception("Prediction error")
-                return Response({"error": "Prediction failed", "details": str(e)},
-                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Prediction failed",
+                    "details": str(e)
+                })
+                continue
 
-            results.append({"uploaded": img_serializer.data, "prediction": prediction})
+            results.append({
+                "index": idx,
+                "filename": getattr(img, "name", f"image-{idx}"),
+                "uploaded": img_serializer.data,
+                "prediction": prediction
+            })
 
-        return Response({"results": results}, status=status.HTTP_201_CREATED)
+        # If there were errors, return them alongside results so frontend can show exactly which files failed.
+        response_payload = {"results": results, "errors": errors}
+        if errors:
+            return Response(response_payload, status=status.HTTP_207_MULTI_STATUS)
+        return Response(response_payload, status=status.HTTP_201_CREATED)
 
 # Add an API view that accepts one image and returns prediction
 class AdScanAPIView(APIView):
