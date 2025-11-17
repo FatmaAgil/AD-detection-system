@@ -3,11 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Users,
-  FileText,
-  Image,
   BarChart3,
-  Activity,
-  Settings,
   Stethoscope,
   Mail, // <-- Import the Mail icon from lucide-react
 } from "lucide-react";
@@ -16,7 +12,6 @@ const navItems = [
   { to: "/admin-dashboard", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
   { to: "/users", label: "User Management", icon: <Users size={20} /> },
   { to: "/admin-messages", label: "Messages", icon: <Mail size={20} /> }, // <-- Use Mail icon for Messages
-  { to: "/content", label: "Content", icon: <FileText size={20} /> },
   { to: "/analytics", label: "Analytics", icon: <BarChart3 size={20} /> },
 ];
 
