@@ -22,10 +22,26 @@ export default function AdScan() {
   const chatRef = useRef(null);
   const chatMessagesRef = useRef(chatMessages);
 
+  // keep a list of created preview URLs so we revoke only what we created
+  const previewsRef = useRef([]);
+
   // keep a ref copy of chatMessages so sendMessage can build a stable payload
   useEffect(() => {
     chatMessagesRef.current = chatMessages;
   }, [chatMessages]);
+
+  // revoke all previews on component unmount only
+  useEffect(() => {
+    return () => {
+      previewsRef.current.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {}
+      });
+      previewsRef.current = [];
+    };
+  }, []);
+
   // live risk estimate from backend (0..1)
   const [riskEstimate, setRiskEstimate] = useState(null);
 
@@ -33,6 +49,18 @@ export default function AdScan() {
   const [analyzing, setAnalyzing] = useState(false); // scan in progress
 
   const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+  const revokePreview = (url) => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+  };
+
+  const clearAllPreviews = () => {
+    previewsRef.current.forEach(revokePreview);
+    previewsRef.current = [];
+    setImages([]);
+  };
 
   // build chat object from current state
   const buildChatObject = () => {
@@ -81,7 +109,7 @@ export default function AdScan() {
     const shouldSave = window.confirm("Save current scan to history before starting a new chat?");
     if (shouldSave) handleSaveToHistory();
     // clear state
-    setImages([]);
+    clearAllPreviews();
     setResults([]);
     setErrors([]);
   };
@@ -106,6 +134,7 @@ export default function AdScan() {
 
       // additionally validate size and type for acceptedFiles (defensive)
       const validated = [];
+
       acceptedFiles.forEach((file) => {
         if (file.size > MAX_FILE_SIZE) {
           newErrors.push(`${file.name}: file is too large (max 5MB)`);
@@ -116,9 +145,12 @@ export default function AdScan() {
           newErrors.push(`${file.name}: unsupported image format`);
           return;
         }
+        // create a stable preview URL and remember it for cleanup
+        const url = URL.createObjectURL(file);
+        previewsRef.current.push(url);
         validated.push(
           Object.assign(file, {
-            preview: URL.createObjectURL(file),
+            preview: url,
           })
         );
       });
@@ -152,20 +184,13 @@ export default function AdScan() {
       const next = [...prev];
       const [removed] = next.splice(index, 1);
       if (removed && removed.preview) {
-        URL.revokeObjectURL(removed.preview);
+        // revoke the single preview and remove it from our previewsRef list
+        revokePreview(removed.preview);
+        previewsRef.current = previewsRef.current.filter((u) => u !== removed.preview);
       }
       return next;
     });
   };
-
-  // cleanup previews on unmount
-  useEffect(() => {
-    return () => {
-      images.forEach((f) => {
-        if (f.preview) URL.revokeObjectURL(f.preview);
-      });
-    };
-  }, [images]);
 
   // auto-scroll chat to bottom when messages change
   useEffect(() => {
@@ -194,13 +219,34 @@ export default function AdScan() {
         body: formData,
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (res.ok) {
-        const data = await res.json();
+        // server returns { results: [...], errors: [...] } (errors may be present)
         setResults(data.results || []);
-        alert("Images uploaded and analyzed successfully!");
+        if (data.errors && data.errors.length > 0) {
+          const msgs = data.errors.map((e) => {
+            const idx = e.index != null ? `#${e.index}` : "";
+            const name = e.filename ? `(${e.filename})` : "";
+            // prefer readable detail if available
+            let detail = "";
+            if (e.details) {
+              try {
+                detail = typeof e.details === "string" ? e.details : JSON.stringify(e.details);
+              } catch {
+                detail = String(e.details);
+              }
+            }
+            return `Image ${idx} ${name}: ${e.error}${detail ? " - " + detail : ""}`;
+          });
+          setErrors((prev) => [...prev, ...msgs]);
+          alert("Some images failed:\n" + msgs.join("\n"));
+        } else {
+          alert("Images uploaded and analyzed successfully!");
+        }
       } else {
-        const error = await res.json().catch(() => ({}));
-        const msg = error.error || error.detail || "Upload failed.";
+        // non-OK response
+        const msg = data.error || data.detail || "Upload failed.";
         setErrors((prev) => [...prev, msg]);
         alert(msg);
       }
@@ -366,7 +412,7 @@ export default function AdScan() {
               </button>
               <button
                 onClick={() => {
-                  setImages([]);
+                  clearAllPreviews();
                   setErrors([]);
                 }}
                 disabled={analyzing || images.length === 0}
@@ -417,14 +463,35 @@ export default function AdScan() {
                   }}
                 >
                   <div style={{ position: "relative", width: 80, height: 80 }}>
+                    {/* index badge */}
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: -10,
+                        left: -10,
+                        background: "#1e90e8",
+                        color: "#fff",
+                        fontSize: 12,
+                        padding: "3px 7px",
+                        borderRadius: 14,
+                        fontWeight: 700,
+                        zIndex: 20,
+                        boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+                      }}
+                      aria-hidden="true"
+                    >
+                      #{idx + 1}
+                    </span>
+
                     <img
-                      src={img.preview || URL.createObjectURL(img)}
-                      alt={`upload-${idx}`}
+                      src={img.preview}
+                      alt={`upload-${idx + 1}`}
                       style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6 }}
                     />
                     <button
                       onClick={() => removeImage(idx)}
-                      title="Remove"
+                      title={`Remove image #${idx + 1}`}
+                      aria-label={`Remove image ${idx + 1}`}
                       style={{
                         position: "absolute",
                         top: -8,
@@ -440,12 +507,26 @@ export default function AdScan() {
                         cursor: "pointer",
                         fontWeight: 700,
                         color: "#d11f1f",
+                        zIndex: 30,
                       }}
                     >
                       ×
                     </button>
                   </div>
-                  <div style={{ fontSize: 12, color: "#334155", textAlign: "center", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.name}</div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "#334155",
+                      textAlign: "center",
+                      maxWidth: 100,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={img.name}
+                  >
+                    {img.name}
+                  </div>
                 </div>
               ))}
             </div>
@@ -559,7 +640,10 @@ export default function AdScan() {
 
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {results.map((r, i) => {
-                  const localImg = images[i] ? images[i].preview || (images[i] && URL.createObjectURL(images[i])) : r.uploaded?.image || null;
+                  // Prefer server-provided index (1-based) to find the correct image,
+                  // fall back to result index if none provided.
+                  const imgIndex = r.index != null ? r.index - 1 : i;
+                  const localImg = images[imgIndex]?.preview || r.uploaded?.image || null;
                   const label = (r?.prediction?.label || "unknown").toLowerCase();
                   const isAd = label === "ad";
                   return (
