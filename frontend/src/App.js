@@ -14,8 +14,8 @@ import AdminMessages from './components/AdminMessages';
 import UserProfile from './components/UserProfile';
 import AdScan from './components/AdScan';
 import ChatHistory from './components/ChatHistory';
-
-function App() {
+import Analytics from './components/Analytics';
+function App() {  
   return (
     <Router>
       <Routes>
@@ -34,7 +34,7 @@ function App() {
         <Route path="/contact" element={<Contact />} />
         <Route path="/admin-messages" element={<AdminMessages />} />
         <Route path="/profile" element={<UserProfile />} />
-       
+        <Route path="/analytics" element={<Analytics />} />
       </Routes>
     </Router>
   );

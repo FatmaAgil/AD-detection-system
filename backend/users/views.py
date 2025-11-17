@@ -30,7 +30,9 @@ import numpy as np
 
 # Create your views here.
 
+# ============================================================
 # Model loader + prediction helper (loads model once)
+# ============================================================
 _ad_model = None
 
 def get_ad_model():
@@ -42,31 +44,39 @@ def get_ad_model():
         _ad_model = load_model(str(model_path))
     return _ad_model
 
+# ============================================================
+# Corrected prediction function for new .keras model
+# ============================================================
 def predict_ad(image_file):
     """
     image_file: file-like (InMemoryUploadedFile)
-    returns: dict { 'label': 'ad'|'no_ad', 'score': float }
+    returns: dict { 'label': 'ad'|'not_ad', 'score': float, 'confidence': float, 'raw_probability': float }
     """
     model = get_ad_model()
-    target_size = (180, 180)  # match your training size exactly
+    target_size = (224, 224)  # adjust to your training input size
 
     # Load and preprocess image
     img = Image.open(image_file).convert('RGB').resize(target_size)
-    x = np.array(img).astype('float32')
-    x = np.expand_dims(x, 0)
-    x = preprocess_input(x)  # ✅ SAME preprocessing used during training
+    x = np.array(img).astype('float32') / 255.0  # normalize 0-1
+    x = np.expand_dims(x, 0)  # add batch dimension
 
     # Predict
-    preds = model.predict(x)
-    preds = np.array(preds).squeeze()
+    raw_probability = float(model.predict(x, verbose=0)[0][0])
 
-    # Since output layer = Dense(1, activation='sigmoid')
-    score = float(preds) if np.ndim(preds) == 0 else float(preds.item())
-    label = 'ad' if score >= 0.5 else 'no_ad'
+    # Corrected logic: inverted labels
+    is_ad = raw_probability < 0.31
+    # return lowercase label that frontend/chat logic expects
+    label = "ad" if is_ad else "not_ad"
+    confidence = (1 - raw_probability) if is_ad else raw_probability
+    score = float(confidence)  # frontend expects `prediction.score` in 0..1
 
-    return {'label': label, 'score': score}
-
-
+    return {
+        "label": label,
+        "score": score,
+        "confidence": float(confidence),    # kept for backward compatibility
+        "is_atopic_dermatitis": bool(is_ad),
+        "raw_probability": float(raw_probability)
+    }
 # Signup API
 class RegisterView(APIView):
     def post(self, request):

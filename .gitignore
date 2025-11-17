@@ -70,3 +70,8 @@ yarn.lock
 # ============================
 Thumbs.db
 .DS_Store
+
+
+backend/ad_models/*.keras
+# Ignore uploaded ad scan images
+backend/media/adscan_images/

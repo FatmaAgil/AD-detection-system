@@ -9,6 +9,7 @@ import {
   Activity,
   FileText,
 } from "lucide-react";
+import Analytics from "./Analytics";
 
 // Dashboard Overview content
 function DashboardOverview({ stats }) {
@@ -152,7 +153,7 @@ export default function AdminDashboard() {
             <Route path="/admins" element={<Placeholder title="Admin Management" />} />
             <Route path="/content" element={<Placeholder title="Content Management" />} />
             <Route path="/analysis" element={<Placeholder title="Image Analysis Monitor" />} />
-            <Route path="/analytics" element={<Placeholder title="Analytics & Reports" />} />
+            <Route path="/analytics" element={<Analytics />} />
             <Route path="/health" element={<Placeholder title="System Health" />} />
             <Route path="/settings" element={<Placeholder title="Settings" />} />
           </Routes>
