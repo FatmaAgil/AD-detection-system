@@ -19,64 +19,330 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import logging
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated  # or AllowAny for public
+from rest_framework.permissions import IsAuthenticated
 
 # new imports for model connection and prediction
 from django.conf import settings
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input #type: ignore
-from tensorflow.keras.models import load_model #type: ignore
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input  # type: ignore
+from tensorflow.keras.models import load_model  # type: ignore
 from PIL import Image
 import numpy as np
+import joblib
+import tempfile
+import os
 
 # Create your views here.
 
 # ============================================================
-# Model loader + prediction helper (loads model once)
+# Model loaders for BOTH models (light and dark skin)
 # ============================================================
-_ad_model = None
+_ad_model_light = None
+_ad_model_dark = None
 
-def get_ad_model():
-    global _ad_model
-    if _ad_model is None:
-        model_path = getattr(settings, 'MODEL_PATH', None)
+def get_ad_model_light():
+    global _ad_model_light
+    if _ad_model_light is None:
+        model_path = getattr(settings, 'MODEL_PATH_LIGHT', None)
         if not model_path:
-            raise RuntimeError("MODEL_PATH not configured in settings.")
-        _ad_model = load_model(str(model_path))
-    return _ad_model
+            raise RuntimeError("MODEL_PATH_LIGHT not configured in settings.")
+        _ad_model_light = load_model(str(model_path))
+        print("✅ Light skin model loaded successfully")
+    return _ad_model_light
+
+def get_ad_model_dark():
+    global _ad_model_dark
+    if _ad_model_dark is None:
+        model_path = getattr(settings, 'MODEL_PATH_DARK', None)
+        if not model_path:
+            raise RuntimeError("MODEL_PATH_DARK not configured in settings.")
+        # Load the hybrid/deployable model (joblib serialized)
+        _ad_model_dark = joblib.load(str(model_path))
+        print("✅ Dark skin model loaded successfully")
+    return _ad_model_dark
 
 # ============================================================
-# Corrected prediction function for new .keras model
+# Prediction functions for BOTH models
 # ============================================================
-def predict_ad(image_file):
+def predict_ad_light(image_file):
     """
-    image_file: file-like (InMemoryUploadedFile)
-    returns: dict { 'label': 'ad'|'not_ad', 'score': float, 'confidence': float, 'raw_probability': float }
+    Original model for light skin tones
     """
-    model = get_ad_model()
-    target_size = (224, 224)  # adjust to your training input size
+    model = get_ad_model_light()
+    target_size = (224, 224)
 
     # Load and preprocess image
     img = Image.open(image_file).convert('RGB').resize(target_size)
-    x = np.array(img).astype('float32') / 255.0  # normalize 0-1
-    x = np.expand_dims(x, 0)  # add batch dimension
+    x = np.array(img).astype('float32') / 255.0
+    x = np.expand_dims(x, 0)
 
     # Predict
     raw_probability = float(model.predict(x, verbose=0)[0][0])
 
-    # Corrected logic: inverted labels
+    # Your existing logic (kept)
     is_ad = raw_probability < 0.31
-    # return lowercase label that frontend/chat logic expects
     label = "ad" if is_ad else "not_ad"
     confidence = (1 - raw_probability) if is_ad else raw_probability
-    score = float(confidence)  # frontend expects `prediction.score` in 0..1
+    score = float(confidence)
 
     return {
         "label": label,
         "score": score,
-        "confidence": float(confidence),    # kept for backward compatibility
+        "confidence": float(confidence),
         "is_atopic_dermatitis": bool(is_ad),
-        "raw_probability": float(raw_probability)
+        "raw_probability": float(raw_probability),
+        "model_used": "General Model (Light Skin Optimized)"
     }
+
+def predict_ad_dark(image_file):
+    """
+    Hybrid / deployable model for dark skin tones.
+    Accepts multiple return formats from the deployable model:
+      - dict with keys like 'prediction' and 'probability'
+      - a raw float probability
+      - list/ndarray (first/last element interpreted as probability)
+    Tries model.predict_single_image(tmp_path, use_hybrid=True) first,
+    falls back to model.predict_single_image(tmp_path) if the kwarg isn't supported.
+    """
+    model = get_ad_model_dark()
+
+    tmp_path = None
+    try:
+        # Create a temporary file path for the image (some deployable models expect a file path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            for chunk in image_file.chunks():
+                tmp_file.write(chunk)
+            tmp_path = tmp_file.name
+
+        # Reset pointer for potential fallback usage
+        try:
+            image_file.seek(0)
+        except Exception:
+            pass
+
+        # call predict_single_image, try with use_hybrid kwarg first, then without
+        predict_fn = getattr(model, "predict_single_image", None)
+        if predict_fn is None:
+            # If no predict_single_image, try a generic call (may raise)
+            raise RuntimeError("Deployable dark-skin model does not implement predict_single_image(path)")
+
+        try:
+            result = predict_fn(tmp_path, use_hybrid=True)
+        except TypeError as te:
+            logging.getLogger(__name__).warning(
+                "predict_single_image() does not accept 'use_hybrid', retrying without it: %s", te
+            )
+            result = predict_fn(tmp_path)
+
+        # Normalize many possible result formats into a probability (0..1)
+        prob = None
+        prediction_label = None
+        confidence_level = "Medium"
+
+        # dict-like result
+        if isinstance(result, dict):
+            prediction_label = result.get("prediction") or result.get("label")
+            # try common probability keys
+            for k in ("probability", "prob", "score", "confidence"):
+                if k in result and result[k] is not None:
+                    try:
+                        prob = float(result[k])
+                        break
+                    except Exception:
+                        pass
+            confidence_level = result.get("confidence", confidence_level)
+
+        # numeric result: treat as probability
+        elif isinstance(result, (float, int)):
+            prob = float(result)
+
+        # array / list-like result: try to pick a sensible element
+        elif isinstance(result, (list, tuple, np.ndarray)):
+            a = np.array(result).flatten()
+            if a.size == 1:
+                try:
+                    prob = float(a[0])
+                except Exception:
+                    prob = None
+            elif a.size >= 2:
+                # common pattern: [neg_prob, pos_prob] or [pos_prob]
+                try:
+                    prob = float(a[-1])
+                except Exception:
+                    prob = None
+
+        # fallback: attempt to coerce to float
+        if prob is None:
+            try:
+                prob = float(result)
+            except Exception:
+                raise RuntimeError(f"Unexpected hybrid model result format: {type(result)}")
+
+        # Decide label/decision. For hybrid model we assume probability is "AD probability".
+        # If you want a different threshold, change threshold variable below.
+        THRESHOLD = 0.5
+        is_ad = prob >= THRESHOLD
+        label = "ad" if is_ad else "not_ad"
+
+        return {
+            "label": label,
+            "score": float(prob),
+            "confidence": float(prob),
+            "is_atopic_dermatitis": bool(is_ad),
+            "raw_probability": float(prob),
+            "model_used": "Dark Skin Optimized Model",
+            "confidence_level": confidence_level
+        }
+
+    except Exception as e:
+        logging.getLogger(__name__).exception("Hybrid model failed, falling back to light model: %s", e)
+        # fallback to light model
+        try:
+            try:
+                image_file.seek(0)
+            except Exception:
+                pass
+            return predict_ad_light(image_file)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+# ============================================================
+# Updated upload view with model selection
+# ============================================================
+class AdScanImageUploadView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        logger = logging.getLogger(__name__)
+        logger.debug("AdScan upload - FILES: %s", request.FILES)
+        logger.debug("AdScan upload - DATA: %s", request.data)
+
+        # Get model selection from request (default to 'light')
+        model_type = request.data.get('model_type', 'light')  # 'light' or 'dark'
+        logger.debug(f"Using model type: {model_type}")
+
+        # accept multiple files under 'images' or a single file under 'image'
+        images = request.FILES.getlist('images')
+        if not images:
+            single = request.FILES.get('image')
+            if single:
+                images = [single]
+            else:
+                return Response(
+                    {"error": "No images uploaded. Use form field 'images' (multiple) or 'image' (single)."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        results = []
+        errors = []
+        for idx, img in enumerate(images, start=1):
+            # validate with AdScanSerializer
+            ad_check = AdScanSerializer(data={'image': img})
+            if not ad_check.is_valid():
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Invalid image",
+                    "details": ad_check.errors
+                })
+                # skip this file, continue with others
+                continue
+
+            # save to AdScanImage (if desired)
+            img_serializer = AdScanImageSerializer(data={'image': img})
+            if not img_serializer.is_valid():
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Failed to save image",
+                    "details": img_serializer.errors
+                })
+                continue
+
+            try:
+                # attach user if serializer/model accepts it; otherwise save without user
+                try:
+                    instance = img_serializer.save(user=request.user)
+                except TypeError:
+                    instance = img_serializer.save()
+            except Exception as e:
+                logger.exception("Saving image failed")
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Saving image failed",
+                    "details": str(e)
+                })
+                continue
+
+            # run prediction with selected model
+            try:
+                if model_type == 'dark':
+                    prediction = predict_ad_dark(img)
+                else:
+                    prediction = predict_ad_light(img)
+            except Exception as e:
+                logger.exception("Prediction error")
+                errors.append({
+                    "index": idx,
+                    "filename": getattr(img, "name", f"image-{idx}"),
+                    "error": "Prediction failed",
+                    "details": str(e)
+                })
+                continue
+
+            results.append({
+                "index": idx,
+                "filename": getattr(img, "name", f"image-{idx}"),
+                "uploaded": img_serializer.data,
+                "prediction": prediction
+            })
+
+        # If there were errors, return them alongside results so frontend can show exactly which files failed.
+        response_payload = {
+            "results": results,
+            "errors": errors,
+            "model_used": "Dark Skin Optimized Model" if model_type == 'dark' else "General Model"
+        }
+        if errors:
+            return Response(response_payload, status=status.HTTP_207_MULTI_STATUS)
+        return Response(response_payload, status=status.HTTP_201_CREATED)
+
+# ============================================================
+# Single image API view (uses light model by default for backward compatibility)
+# ============================================================
+class AdScanAPIView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AdScanSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        image = serializer.validated_data['image']
+        try:
+            # For single image API, use light model by default
+            result = predict_ad_light(image)
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# ============================================================
+# ALL YOUR EXISTING AUTH AND OTHER VIEWS (kept as before)
+# ============================================================
+
 # Signup API
 class RegisterView(APIView):
     def post(self, request):
@@ -118,7 +384,7 @@ class LoginView(APIView):
                 'message': '2FA code sent to your email.',
                 'user_id': user.id,
                 'role': role,
-                'username': user.username,  # <-- Add this line
+                'username': user.username,
             }, status=status.HTTP_200_OK)
         return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -137,7 +403,7 @@ class Verify2FAView(APIView):
                     'role': user.profile.role,
                     'access': tokens['access'],
                     'refresh': tokens['refresh'],
-                    'username': user.username,  # <-- Add this line
+                    'username': user.username,
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({'detail': 'Invalid code'}, status=status.HTTP_400_BAD_REQUEST)
@@ -199,9 +465,6 @@ class MessageReplyListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        # Optionally, check for admin:
-        # if not request.user.is_staff:
-        #     return Response({"detail": "Admins only."}, status=403)
         serializer = MessageReplySerializer(data={
             'message': pk,
             'admin': request.user.id,
@@ -247,114 +510,6 @@ class UserContactMessagesView(APIView):
         messages = ContactMessage.objects.filter(email=request.user.email).order_by('-created_at')
         serializer = ContactMessageSerializer(messages, many=True)
         return Response(serializer.data)
-
-class AdScanImageUploadView(APIView):
-    parser_classes = [MultiPartParser, FormParser]
-    # for testing set AllowAny; change back to IsAuthenticated once verified
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        logger = logging.getLogger(__name__)
-        logger.debug("AdScan upload - FILES: %s", request.FILES)
-        logger.debug("AdScan upload - DATA: %s", request.data)
-
-        # accept multiple files under 'images' or a single file under 'image'
-        images = request.FILES.getlist('images')
-        if not images:
-            single = request.FILES.get('image')
-            if single:
-                images = [single]
-            else:
-                return Response(
-                    {"error": "No images uploaded. Use form field 'images' (multiple) or 'image' (single)."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        results = []
-        errors = []
-        for idx, img in enumerate(images, start=1):
-            # validate with AdScanSerializer
-            ad_check = AdScanSerializer(data={'image': img})
-            if not ad_check.is_valid():
-                errors.append({
-                    "index": idx,
-                    "filename": getattr(img, "name", f"image-{idx}"),
-                    "error": "Invalid image",
-                    "details": ad_check.errors
-                })
-                # skip this file, continue with others
-                continue
-
-            # save to AdScanImage (if desired)
-            img_serializer = AdScanImageSerializer(data={'image': img})
-            if not img_serializer.is_valid():
-                errors.append({
-                    "index": idx,
-                    "filename": getattr(img, "name", f"image-{idx}"),
-                    "error": "Failed to save image",
-                    "details": img_serializer.errors
-                })
-                continue
-
-            try:
-                # attach user if serializer/model accepts it; otherwise save without user
-                try:
-                    instance = img_serializer.save(user=request.user)
-                except TypeError:
-                    instance = img_serializer.save()
-            except Exception as e:
-                logger.exception("Saving image failed")
-                errors.append({
-                    "index": idx,
-                    "filename": getattr(img, "name", f"image-{idx}"),
-                    "error": "Saving image failed",
-                    "details": str(e)
-                })
-                continue
-
-            # run prediction
-            try:
-                prediction = predict_ad(img)  # file-like object
-            except Exception as e:
-                logger.exception("Prediction error")
-                errors.append({
-                    "index": idx,
-                    "filename": getattr(img, "name", f"image-{idx}"),
-                    "error": "Prediction failed",
-                    "details": str(e)
-                })
-                continue
-
-            results.append({
-                "index": idx,
-                "filename": getattr(img, "name", f"image-{idx}"),
-                "uploaded": img_serializer.data,
-                "prediction": prediction
-            })
-
-        # If there were errors, return them alongside results so frontend can show exactly which files failed.
-        response_payload = {"results": results, "errors": errors}
-        if errors:
-            return Response(response_payload, status=status.HTTP_207_MULTI_STATUS)
-        return Response(response_payload, status=status.HTTP_201_CREATED)
-
-# Add an API view that accepts one image and returns prediction
-class AdScanAPIView(APIView):
-    parser_classes = [MultiPartParser, FormParser]
-    permission_classes = [IsAuthenticated]  # change to AllowAny if you want public access
-
-    def post(self, request):
-        serializer = AdScanSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        image = serializer.validated_data['image']
-        try:
-            result = predict_ad(image)
-            return Response(result, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
@@ -404,39 +559,30 @@ def chat_view(request):
     )
 
     # Robustly pair AI questions with user answers.
-    # Strategy:
-    # 1) Walk previous_state, map each AI question to the next user message (if any).
-    # 2) If no user reply is found in previous_state for the last AI question,
-    #    use the current request's user_input as that answer (handles frontend timing).
     answers = {}
     last_ai_question = None
-    # compare questions case-insensitive
     normalized_questions = [q.strip().lower() for q in AD_QUESTIONS]
 
     for msg in previous_state:
         sender = (msg.get("sender") or "").strip().lower()
         text = (msg.get("text") or "").strip()
         if sender == "ai" and text.lower() in normalized_questions:
-            last_ai_question = text  # keep original text form as key
+            last_ai_question = text
             continue
         if sender == "user" and last_ai_question:
             if last_ai_question not in answers and text != "":
                 answers[last_ai_question] = text.lower()
             last_ai_question = None
 
-    # If the frontend didn't include the latest user reply in previous_state (race),
-    # treat the current user_input as the answer to the most recent AI question.
     if last_ai_question and last_ai_question not in answers and user_input:
         answers[last_ai_question] = user_input.lower()
 
-    # Determine next unanswered question (use original AD_QUESTIONS ordering)
     next_question = None
     for q in AD_QUESTIONS:
         if q not in answers:
             next_question = q
             break
 
-    # Build AI reply text
     if not previous_state:
         reply = f"Hello — {summary}"
     else:
@@ -444,7 +590,6 @@ def chat_view(request):
         if next_question is None:
             reply += " All questions completed."
 
-    # Normalize common affirmative/negative variants
     def normalize_yes_no(t):
         if not t:
             return None
