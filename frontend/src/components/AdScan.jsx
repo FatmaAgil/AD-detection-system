@@ -2,19 +2,21 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import UserSidebar from "./UserSidebar";
 import UserNavbar from "./UserNavbar";
-import { saveChat } from "../utils/chatStorage"; // added import
+import { saveChat } from "../utils/chatStorage";
 
 export default function AdScan() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const sidebarWidth = sidebarCollapsed ? 60 : 220;
   const [images, setImages] = useState([]);
-  const [results, setResults] = useState([]); // <-- new
+  const [results, setResults] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSrc, setModalSrc] = useState(null);
 
-  // Chat state (Step 3)
+  // NEW: Model selection state
+  const [selectedModel, setSelectedModel] = useState('light'); // 'light' or 'dark'
+
+  // Chat state
   const [chatMessages, setChatMessages] = useState([
-    // optionally seed with a welcome message
     { sender: "ai", text: "Hi — ask me about the scan results or upload more images." },
   ]);
   const [userInput, setUserInput] = useState("");
@@ -199,7 +201,7 @@ export default function AdScan() {
     }
   }, [chatMessages]);
 
-  // handle scanning (previously handleImageUpload)
+  // UPDATED: handle scanning with model selection
   const handleScan = async () => {
     if (images.length === 0) return;
     setErrors([]);
@@ -209,6 +211,9 @@ export default function AdScan() {
     try {
       const formData = new FormData();
       images.forEach((file) => formData.append("images", file, file.name));
+      
+      // NEW: Add model selection to form data
+      formData.append("model_type", selectedModel);
 
       const res = await fetch("http://localhost:8000/api/adscan/upload/", {
         method: "POST",
@@ -224,6 +229,15 @@ export default function AdScan() {
       if (res.ok) {
         // server returns { results: [...], errors: [...] } (errors may be present)
         setResults(data.results || []);
+        
+        // NEW: Show which model was used in chat
+        if (data.model_used) {
+          setChatMessages(prev => [...prev, {
+            sender: "ai", 
+            text: `Analysis completed using ${data.model_used}.`
+          }]);
+        }
+        
         if (data.errors && data.errors.length > 0) {
           const msgs = data.errors.map((e) => {
             const idx = e.index != null ? `#${e.index}` : "";
@@ -242,7 +256,8 @@ export default function AdScan() {
           setErrors((prev) => [...prev, ...msgs]);
           alert("Some images failed:\n" + msgs.join("\n"));
         } else {
-          alert("Images uploaded and analyzed successfully!");
+          const modelName = selectedModel === 'light' ? 'General Model' : 'Dark Skin Optimized Model';
+          alert(`Images analyzed successfully using ${modelName}!`);
         }
       } else {
         // non-OK response
@@ -344,7 +359,7 @@ export default function AdScan() {
     };
   }, [modalOpen]);
 
-  // Section 1: Upload Images (replaced UI)
+  // Section 1: Upload Images with Model Selection
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #e3f0ff 0%, #f9fbfd 100%)" }}>
       <UserSidebar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} />
@@ -373,6 +388,60 @@ export default function AdScan() {
           }}
         >
           <h2 style={{ color: "#1e90e8", marginBottom: 18 }}>1. Upload Images</h2>
+
+          {/* NEW: Model Selection UI */}
+          <div style={{ marginBottom: 20, padding: 16, background: "#f8fafc", borderRadius: 12 }}>
+            <h3 style={{ color: "#334155", marginBottom: 12, fontSize: 16 }}>Select Analysis Model:</h3>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="modelType"
+                  value="light"
+                  checked={selectedModel === 'light'}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  style={{ cursor: "pointer" }}
+                />
+                <span style={{ fontWeight: 600, color: selectedModel === 'light' ? "#1e90e8" : "#64748b" }}>
+                  General Model
+                </span>
+                <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 8 }}>
+                  (Optimized for lighter skin tones)
+                </span>
+              </label>
+              
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="modelType"
+                  value="dark"
+                  checked={selectedModel === 'dark'}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  style={{ cursor: "pointer" }}
+                />
+                <span style={{ fontWeight: 600, color: selectedModel === 'dark' ? "#1e90e8" : "#64748b" }}>
+                  Dark Skin Optimized
+                </span>
+                <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 8 }}>
+                  (Specialized for darker skin tones)
+                </span>
+              </label>
+            </div>
+            
+            {/* Disclaimer */}
+            <div style={{ marginTop: 12, padding: 12, background: "#fff3cd", borderRadius: 8, border: "1px solid #ffeaa7" }}>
+              <div style={{ fontSize: 13, color: "#856404", fontWeight: 600 }}>
+                ⚠️ Model Selection Guide:
+              </div>
+              <div style={{ fontSize: 12, color: "#856404", marginTop: 4 }}>
+                • <strong>General Model</strong>: Best for lighter skin tones. Higher accuracy on training data.
+                <br />
+                • <strong>Dark Skin Optimized</strong>: Specialized for darker skin tones where AD appears differently.
+                <br />
+                • Current selection: <strong>{selectedModel === 'light' ? 'General Model' : 'Dark Skin Optimized Model'}</strong>
+              </div>
+            </div>
+          </div>
 
           <div
             {...getRootProps()}
@@ -625,15 +694,22 @@ export default function AdScan() {
             <div style={{ fontSize: 17, color: "#64748b" }}>No scans yet. Upload images to analyze.</div>
           ) : (
             <>
-              {/* Summary line */}
+              {/* UPDATED: Summary line with model info */}
               {(() => {
                 const adCount = results.reduce((acc, r) => acc + (r?.prediction?.label === "ad" ? 1 : 0), 0);
+                const modelUsed = results[0]?.prediction?.model_used || (selectedModel === 'light' ? 'General Model' : 'Dark Skin Optimized Model');
+                
                 return (
-                  <div style={{ marginBottom: 10, fontSize: 15, color: "#0f172a", display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 18 }}>🩺</span>
-                    <strong style={{ color: "#0f172a" }}>
-                      {adCount} of {results.length} uploaded image{results.length > 1 ? "s" : ""} show{results.length > 1 ? "" : "s"} signs of Atopic Dermatitis.
-                    </strong>
+                  <div style={{ marginBottom: 10, fontSize: 15, color: "#0f172a", display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 18 }}>🩺</span>
+                      <strong style={{ color: "#0f172a" }}>
+                        {adCount} of {results.length} uploaded image{results.length > 1 ? "s" : ""} show{results.length > 1 ? "" : "s"} signs of Atopic Dermatitis.
+                      </strong>
+                    </div>
+                    <div style={{ fontSize: 14, color: "#64748b", background: "#f1f5f9", padding: 8, borderRadius: 6 }}>
+                      📊 Analysis performed using: <strong>{modelUsed}</strong>
+                    </div>
                   </div>
                 );
               })()}

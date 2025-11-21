@@ -162,5 +162,7 @@ REST_FRAMEWORK = {
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-
-MODEL_PATH = BASE_DIR / 'ad_models' / 'ad_detection_cnn_model.keras'
+# Add these to your settings.py
+MODEL_PATH_LIGHT = BASE_DIR / 'ad_models' / 'ad_detection_cnn_model.keras'  # Your original model
+MODEL_PATH_DARK = BASE_DIR / 'ad_models' / 'hybrid_skin_model_final.pkl'    # Your new hybrid model
+# MODEL_PATH = BASE_DIR / 'ad_models' / 'ad_detection_cnn_model.keras'
