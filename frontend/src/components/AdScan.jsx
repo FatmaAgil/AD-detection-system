@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import UserSidebar from "./UserSidebar";
 import UserNavbar from "./UserNavbar";
-import { saveChat } from "../utils/chatStorage";
+import UniversalSymptomForm from "./UniversalSymptomForm";
 
 export default function AdScan() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -15,22 +15,11 @@ export default function AdScan() {
   // NEW: Model selection state
   const [selectedModel, setSelectedModel] = useState('light'); // 'light' or 'dark'
 
-  // Chat state
-  const [chatMessages, setChatMessages] = useState([
-    { sender: "ai", text: "Hi — ask me about the scan results or upload more images." },
-  ]);
-  const [userInput, setUserInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const chatRef = useRef(null);
-  const chatMessagesRef = useRef(chatMessages);
+  // (chat removed) -- symptom form / results used instead
+  // chat-related state and refs removed; UI now uses UniversalSymptomForm
 
   // keep a list of created preview URLs so we revoke only what we created
   const previewsRef = useRef([]);
-
-  // keep a ref copy of chatMessages so sendMessage can build a stable payload
-  useEffect(() => {
-    chatMessagesRef.current = chatMessages;
-  }, [chatMessages]);
 
   // revoke all previews on component unmount only
   useEffect(() => {
@@ -46,6 +35,49 @@ export default function AdScan() {
 
   // live risk estimate from backend (0..1)
   const [riskEstimate, setRiskEstimate] = useState(null);
+
+  // universal assessment report (from UniversalSymptomForm) and handler
+  const [universalReport, setUniversalReport] = useState(null);
+  const handleAssessmentSubmit = (report) => {
+    // symptom confidence from form/report (0..1)
+    const symptomConf = Number(report?.final_confidence) || 0;
+
+    // compute scan (AI) confidence from current results (average prediction.score), but only if classified as AD
+    let scanConf = 0;
+    let hasAdClassification = false;
+    if (results && results.length > 0) {
+      const adScores = results
+        .filter((r) => r?.prediction?.label === "ad")  // only include if labeled as AD
+        .map((r) => Number(r?.prediction?.score) || 0);
+      if (adScores.length > 0) {
+        scanConf = adScores.reduce((a, b) => a + b, 0) / adScores.length;
+        hasAdClassification = true;
+      }
+      // If no AD classifications, scanConf remains 0
+    }
+
+    // weights: clinician => symptom heavier (0.6 symptom / 0.4 ai), patient => ai heavier (0.6 ai / 0.4 symptom)
+    const userTypeForWeight = report?.user_type || "patient";
+    const aiWeight = userTypeForWeight === "clinician" ? 0.4 : 0.6;
+    const symWeight = userTypeForWeight === "clinician" ? 0.6 : 0.4;
+
+    // final risk: only combine if there's AI evidence for AD; otherwise, base on symptoms alone (scaled down)
+    const finalRisk = hasAdClassification
+      ? Math.min(1, Math.max(0, aiWeight * scanConf + symWeight * symptomConf))
+      : Math.min(1, Math.max(0, symWeight * symptomConf * 0.5));  // reduce symptom-only risk
+
+    // update UI state
+    setRiskEstimate(finalRisk);
+    setUniversalReport({
+      ...report,
+      combined: {
+        scan_confidence: scanConf,
+        symptom_confidence: symptomConf,
+        has_ad_classification: hasAdClassification,
+        final_combined: finalRisk,
+      },
+    });
+  };
 
   const [errors, setErrors] = useState([]); // validation errors
   const [analyzing, setAnalyzing] = useState(false); // scan in progress
@@ -64,57 +96,7 @@ export default function AdScan() {
     setImages([]);
   };
 
-  // build chat object from current state
-  const buildChatObject = () => {
-    const date = new Date().toISOString();
-    const messages = [];
-
-    messages.push({
-      sender: "user",
-      text: `Uploaded ${images.length} image(s): ${images.map((f) => f.name).join(", ") || "none"}`,
-    });
-
-    messages.push({
-      sender: "ai",
-      text: "Analyzed images and returned predictions.",
-    });
-
-    results.forEach((r, i) => {
-      const label = r?.prediction?.label || "unknown";
-      const score = r?.prediction?.score != null ? `${(r.prediction.score * 100).toFixed(1)}%` : "n/a";
-      messages.push({
-        sender: "ai",
-        text: `Image ${i + 1}: ${label} (confidence ${score})`,
-      });
-    });
-
-    return {
-      id: Date.now(),
-      date,
-      messages,
-      images: images.map((f) => ({ name: f.name, size: f.size, type: f.type })),
-    };
-  };
-
-  const handleSaveToHistory = () => {
-    const chat = buildChatObject();
-    const ok = saveChat(chat);
-    if (ok) {
-      alert("Saved scan to chat history.");
-    } else {
-      alert("Failed to save chat.");
-    }
-  };
-
-  const handleNewChat = () => {
-    if (images.length === 0 && results.length === 0) return;
-    const shouldSave = window.confirm("Save current scan to history before starting a new chat?");
-    if (shouldSave) handleSaveToHistory();
-    // clear state
-    clearAllPreviews();
-    setResults([]);
-    setErrors([]);
-  };
+  // chat/history helpers removed - using symptom form and result saving elsewhere
 
   // DROPZONE: handle dropped / selected files
   const onDrop = useCallback(
@@ -194,13 +176,6 @@ export default function AdScan() {
     });
   };
 
-  // auto-scroll chat to bottom when messages change
-  useEffect(() => {
-    if (chatRef.current) {
-      chatRef.current.scrollTop = chatRef.current.scrollHeight;
-    }
-  }, [chatMessages]);
-
   // UPDATED: handle scanning with model selection
   const handleScan = async () => {
     if (images.length === 0) return;
@@ -230,12 +205,9 @@ export default function AdScan() {
         // server returns { results: [...], errors: [...] } (errors may be present)
         setResults(data.results || []);
         
-        // NEW: Show which model was used in chat
+        // Server may return which model was used
         if (data.model_used) {
-          setChatMessages(prev => [...prev, {
-            sender: "ai", 
-            text: `Analysis completed using ${data.model_used}.`
-          }]);
+          console.log(`Analysis completed using ${data.model_used}`);
         }
         
         if (data.errors && data.errors.length > 0) {
@@ -270,68 +242,6 @@ export default function AdScan() {
       alert("Network error while uploading images.");
     } finally {
       setAnalyzing(false);
-    }
-  };
-
-  // send chat message to backend
-  const sendMessage = async () => {
-    if (loading) return; // prevent duplicate sends
-    const trimmed = userInput.trim();
-    if (!trimmed) return;
-
-    const userMsg = { sender: "user", text: trimmed };
-
-    // build stable payload from ref (reflects latest chatMessages)
-    const payloadState = [...chatMessagesRef.current, userMsg];
-
-    // optimistically update UI
-    setChatMessages(payloadState);
-    setUserInput("");
-    setLoading(true);
-
-    // DEBUG: check payload in console / Network tab
-    console.log("Chat send payloadState:", payloadState);
-    console.log("model_result (results):", results);
-
-    try {
-      const res = await fetch("http://localhost:8000/api/adscan/chat/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-        },
-        body: JSON.stringify({
-          user_input: trimmed,
-          previous_state: payloadState,
-          model_result: results,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        // append server reply(s) once
-        if (data.reply) setChatMessages((cur) => [...cur, { sender: "ai", text: data.reply }]);
-        else setChatMessages((cur) => [...cur, { sender: "ai", text: "No reply from server." }]);
-
-        if (data.next_question) setChatMessages((cur) => [...cur, { sender: "ai", text: data.next_question }]);
-
-        if (data.risk_estimate != null) setRiskEstimate(Number(data.risk_estimate));
-      } else {
-        const err = await res.json().catch(() => ({}));
-        const msg = err.detail || err.error || "Server error";
-        setChatMessages((cur) => [...cur, { sender: "ai", text: `Error: ${msg}` }]);
-      }
-    } catch (err) {
-      setChatMessages((cur) => [...cur, { sender: "ai", text: `Network error: ${err.message}` }]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (!loading) sendMessage();
     }
   };
 
@@ -641,35 +551,8 @@ export default function AdScan() {
               </button>
             )}
 
-            <button
-              onClick={handleSaveToHistory}
-              style={{
-                background: "#f3f4f6",
-                color: "#111827",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                padding: "8px 16px",
-                cursor: "pointer",
-                fontWeight: "600",
-              }}
-            >
-              Save to History
-            </button>
-            <button
-              onClick={handleNewChat}
-              style={{
-                background: "#f3f4f6",
-                color: "#111827",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                padding: "8px 16px",
-                cursor: "pointer",
-                fontWeight: "600",
-              }}
-            >
-              New Chat
-            </button>
-          </div>
+            {/* (history/chat controls removed) */}
+           </div>
 
           {/* inline spinner keyframes */}
           <style>
@@ -834,7 +717,7 @@ export default function AdScan() {
           )}
         </div>
 
-        {/* Section 3: Interactive Chat */}
+        {/* Section 3: Symptom Assessment (replaces chat) */}
         <div
           style={{
             maxWidth: 700,
@@ -848,106 +731,34 @@ export default function AdScan() {
             gap: 12,
           }}
         >
-          <h2 style={{ color: "#1e90e8", marginBottom: 6 }}>3. AI Chat</h2>
+          <h2 style={{ color: "#1e90e8", marginBottom: 6 }}>3. Symptom Assessment</h2>
 
-          <div
-            ref={chatRef}
-            style={{
-              height: 260,
-              overflowY: "auto",
-              padding: 12,
-              borderRadius: 8,
-              background: "#f8fafc",
-              border: "1px solid #eef2f7",
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            {chatMessages.map((m, idx) => {
-              const isUser = m.sender === "user";
-              return (
-                <div
-                  key={idx}
-                  style={{
-                    display: "flex",
-                    justifyContent: isUser ? "flex-end" : "flex-start",
-                  }}
-                >
-                  <div
-                    style={{
-                      maxWidth: "78%",
-                      background: isUser ? "#d1fae5" : "#e7f4ff",
-                      color: "#0f172a",
-                      padding: "8px 12px",
-                      borderRadius: 12,
-                      borderTopLeftRadius: isUser ? 12 : 4,
-                      borderTopRightRadius: isUser ? 4 : 12,
-                      boxShadow: "0 1px 2px rgba(2,6,23,0.04)",
-                      fontSize: 15,
-                    }}
-                  >
-                    {m.text}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <UniversalSymptomForm
+            scanResults={results}
+            userType={"patient"}
+            modelUsed={
+              results && results.length > 0
+                ? results[0]?.prediction?.model_used || (selectedModel === 'light' ? 'General Model' : 'Dark Skin Optimized Model')
+                : selectedModel === 'light'
+                ? 'General Model'
+                : 'Dark Skin Optimized Model'
+            }
+            onFormSubmit={handleAssessmentSubmit}
+          />
 
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <textarea
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask the AI about the scan results..."
-              disabled={loading}
-              rows={2}
-              style={{
-                flex: 1,
-                resize: "none",
-                padding: 10,
-                borderRadius: 8,
-                border: "1px solid #e6eef9",
-                fontSize: 14,
-                background: loading ? "#f1f5f9" : "#fff",
-              }}
-            />
-            <button
-              onClick={sendMessage}
-              disabled={loading || userInput.trim() === ""}
-              style={{
-                background: loading ? "#94c6ff" : "#1e90e8",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                padding: "10px 14px",
-                cursor: loading ? "not-allowed" : "pointer",
-                fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              {loading ? (
-                <>
-                  <span
-                    style={{
-                      width: 14,
-                      height: 14,
-                      border: "2px solid rgba(255,255,255,0.6)",
-                      borderTop: "2px solid #fff",
-                      borderRadius: "50%",
-                      display: "inline-block",
-                      animation: "spin 1s linear infinite",
-                    }}
-                  />
-                  Thinking...
-                </>
-              ) : (
-                "Send"
-              )}
-            </button>
-          </div>
+          {universalReport && (
+            <div style={{ marginTop: 12, padding: 12, background: "#f8fafc", borderRadius: 8 }}>
+              <div style={{ fontWeight: 700 }}>{universalReport.title || "Assessment summary"}</div>
+              <div style={{ color: "#334155", marginTop: 6 }}>{universalReport.summary || ""}</div>
+              <div style={{ marginTop: 8 }}>
+                Symptom confidence: <strong>{Math.round((universalReport.combined?.symptom_confidence || 0) * 100)}%</strong>
+                <br />
+                Scan (AI) confidence: <strong>{Math.round((universalReport.combined?.scan_confidence || 0) * 100)}%</strong>
+                <br />
+                Final combined confidence: <strong>{Math.round((universalReport.combined?.final_combined || 0) * 100)}%</strong>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Section 4: Final Result */}

@@ -15,6 +15,8 @@ import UserProfile from './components/UserProfile';
 import AdScan from './components/AdScan';
 import ChatHistory from './components/ChatHistory';
 import Analytics from './components/Analytics';
+import UniversalSymptomForm from './components/UniversalSymptomForm';
+
 function App() {  
   return (
     <Router>
@@ -35,6 +37,7 @@ function App() {
         <Route path="/admin-messages" element={<AdminMessages />} />
         <Route path="/profile" element={<UserProfile />} />
         <Route path="/analytics" element={<Analytics />} />
+        <Route path="/symptom-form" element={<UniversalSymptomForm />} />
       </Routes>
     </Router>
   );

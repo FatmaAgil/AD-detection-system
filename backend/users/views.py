@@ -528,6 +528,247 @@ def admin_stats(request):
     user_count = User.objects.count()
     return Response({"user_count": user_count})
 
+# ------------------ Universal symptom assessment (new) ------------------
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def universal_symptom_assessment(request):
+    logger = logging.getLogger(__name__)
+    data = request.data or {}
+
+    symptom_answers = data.get("symptom_answers", {})  # dict of question -> answer (usually numeric/string)
+    scan_results = data.get("scan_results", [])       # list of image scan dicts (prediction + model_used)
+    user_type = data.get("user_type", "patient")      # "patient" or "clinician"
+    provided_skin_tone = data.get("detected_skin_tone")  # optional override
+
+    if not symptom_answers:
+        return Response({"error": "No symptom answers provided"}, status=status.HTTP_400_BAD_REQUEST)
+    if not scan_results:
+        return Response({"error": "No scan results provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # determine skin tone context: prefer provided value, otherwise infer from model_used in scan_results
+    skin_tone = (provided_skin_tone or "").lower() if provided_skin_tone else None
+    if not skin_tone:
+        counts = {"dark": 0, "light": 0}
+        for r in scan_results:
+            mu = (r.get("prediction", {}) or {}).get("model_used", "") or r.get("model_used", "") or ""
+            mu_l = mu.lower()
+            if "dark" in mu_l:
+                counts["dark"] += 1
+            elif "light" in mu_l or "general" in mu_l:
+                counts["light"] += 1
+        skin_tone = "dark" if counts["dark"] > counts["light"] else "light"
+
+    try:
+        assessment = calculate_skin_tone_aware_score(symptom_answers, skin_tone, user_type, scan_results)
+        report = generate_universal_report(assessment, symptom_answers, scan_results, user_type)
+        return Response(report, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.exception("universal_symptom_assessment failed")
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def calculate_skin_tone_aware_score(symptom_answers, skin_tone, user_type, scan_results):
+    BASE_WEIGHTS = {
+        'symptom_duration': [0.1, 0.3, 0.6, 0.8],
+        'itching_severity': [0.0, 0.2, 0.5, 0.9],
+        'skin_texture': [0.0, 0.2, 0.5, 0.8],
+        'location_pattern': [0.2, 0.7, 0.5, 0.6],
+    }
+    PIGMENTATION_WEIGHTS = {
+        'light': [0.0, 0.1, 0.2, 0.3],
+        'dark':  [0.0, 0.3, 0.6, 0.8]
+    }
+
+    ai_confidence = calculate_ai_consensus(scan_results)
+
+    total = 0.0
+    count = 0
+    for q, val in symptom_answers.items():
+        try:
+            idx = int(val)
+        except Exception:
+            continue
+        if q in BASE_WEIGHTS:
+            arr = BASE_WEIGHTS[q]
+            idx = max(0, min(idx, len(arr)-1))
+            total += arr[idx]
+            count += 1
+        elif q == 'pigmentation_changes':
+            key = skin_tone if skin_tone in PIGMENTATION_WEIGHTS else 'light'
+            arr = PIGMENTATION_WEIGHTS[key]
+            idx = max(0, min(idx, len(arr)-1))
+            total += arr[idx]
+            count += 1
+
+    symptom_score = (total / count) if count > 0 else 0.0
+
+    if user_type == "clinician":
+        final_confidence = (symptom_score * 0.6) + (ai_confidence * 0.4)
+    else:
+        final_confidence = (symptom_score * 0.4) + (ai_confidence * 0.6)
+
+    return {
+        'final_confidence': float(final_confidence),
+        'symptom_score': float(symptom_score),
+        'ai_confidence': float(ai_confidence),
+        'skin_tone_considered': skin_tone,
+        'user_type': user_type,
+        'breakdown': {
+            'base_symptoms': float(symptom_score),
+            'pigmentation_impact': get_pigmentation_impact(symptom_answers.get('pigmentation_changes'), skin_tone),
+            'ai_contribution': float(ai_confidence * (0.4 if user_type == 'clinician' else 0.6)),
+            'symptom_contribution': float(symptom_score * (0.6 if user_type == 'clinician' else 0.4))
+        }
+    }
+
+def calculate_ai_consensus(scan_results):
+    if not scan_results:
+        return 0.0
+    total_conf = 0.0
+    total_weight = 0.0
+    for r in scan_results:
+        prediction = r.get('prediction', {}) or {}
+        conf = float(prediction.get('score') or prediction.get('confidence') or 0.0)
+        label = prediction.get('label', '')
+        weight = conf if label == 'ad' else (1.0 - conf)
+        total_conf += conf * weight
+        total_weight += weight
+    return float(total_conf / total_weight) if total_weight > 0 else 0.0
+
+def get_pigmentation_impact(pigmentation_answer, skin_tone):
+    if pigmentation_answer is None:
+        return "No pigmentation data provided"
+    try:
+        severity = int(pigmentation_answer)
+    except Exception:
+        return "Invalid pigmentation answer"
+    if skin_tone == 'dark':
+        impacts = [
+            "No significant pigmentation changes",
+            "Mild hyper/hypopigmentation - common in AD on darker skin",
+            "Moderate color changes - supports chronic AD diagnosis",
+            "Severe persistent pigmentation - strongly suggests chronic AD"
+        ]
+    else:
+        impacts = [
+            "No significant pigmentation changes",
+            "Mild color changes - can occur in AD but less significant",
+            "Moderate temporary color changes - may indicate inflammation resolution",
+            "Significant persistent changes - less common in light skin AD"
+        ]
+    return impacts[severity] if 0 <= severity < len(impacts) else impacts[-1]
+
+def generate_universal_report(assessment_result, symptom_answers, scan_results, user_type):
+    final_confidence = assessment_result['final_confidence']
+    if final_confidence >= 0.7:
+        level = "HIGH"
+        urgency = "Strong evidence"
+    elif final_confidence >= 0.4:
+        level = "MODERATE"
+        urgency = "Suggestive"
+    else:
+        level = "LOW"
+        urgency = "Limited evidence"
+
+    skin_tone = assessment_result.get('skin_tone_considered', 'unknown')
+    skin_insights = generate_skin_tone_insights(symptom_answers, skin_tone, scan_results)
+
+    if user_type == "clinician":
+        report = generate_clinician_report(level, final_confidence, symptom_answers, skin_insights, assessment_result['ai_confidence'], skin_tone)
+    else:
+        report = generate_patient_report(level, final_confidence, symptom_answers, skin_insights, assessment_result['ai_confidence'], skin_tone)
+
+    report.update({
+        "assessment_level": level,
+        "final_confidence": final_confidence,
+        "urgency": urgency,
+        "skin_tone_considered": skin_tone,
+        "images_analyzed": len(scan_results),
+        "timestamp": str(np.datetime64('now'))
+    })
+    return report
+
+def generate_skin_tone_insights(symptom_answers, skin_tone, scan_results):
+    insights = []
+    pigmentation = symptom_answers.get('pigmentation_changes')
+    if pigmentation is not None:
+        try:
+            sev = int(pigmentation)
+        except Exception:
+            sev = 0
+        if skin_tone == 'dark':
+            if sev >= 2:
+                insights.append("Pigmentation changes support chronic AD diagnosis")
+                insights.append("Post-inflammatory changes common in melanated skin")
+            if sev >= 1:
+                insights.append("Consider hyperpigmentation management in treatment plan")
+        else:
+            if sev >= 2:
+                insights.append("Persistent color changes less typical - monitor progression")
+
+    loc = symptom_answers.get('location_pattern')
+    try:
+        if loc is not None and int(loc) == 1:
+            insights.append("Flexural distribution classic for AD across all skin tones")
+    except Exception:
+        pass
+
+    dur = symptom_answers.get('symptom_duration')
+    try:
+        if dur is not None and int(dur) >= 2:
+            insights.append("Chronic presentation supports AD diagnosis")
+    except Exception:
+        pass
+
+    itch = symptom_answers.get('itching_severity')
+    try:
+        if itch is not None and int(itch) >= 2:
+            insights.append("Significant itching characteristic of AD")
+    except Exception:
+        pass
+
+    return insights
+
+def generate_clinician_report(assessment_level, final_confidence, symptom_answers, skin_insights, ai_confidence, skin_tone):
+    return {
+        "report_type": "clinical",
+        "title": f"CLINICAL ASSESSMENT: {assessment_level} PROBABILITY OF ATOPIC DERMATITIS",
+        "summary": f"Final Confidence Score: {final_confidence:.2f}",
+        "breakdown": {
+            "ai_analysis_confidence": f"{ai_confidence:.2f}",
+            "clinical_symptom_score": f"{symptom_answers.get('clinical_score', 0):.2f}",
+            "skin_tone_considerations": skin_tone
+        },
+        "key_findings": skin_insights,
+        "recommendations": [
+            "Consider topical corticosteroids for active flares",
+            "Implement daily emollient therapy",
+            "Patient education on trigger avoidance",
+            "Follow-up in 4-6 weeks to assess treatment response"
+        ],
+        "notes": [
+            "AI analysis should be used as decision support only",
+            f"Assessment considered {skin_tone} skin context"
+        ]
+    }
+
+def generate_patient_report(assessment_level, final_confidence, symptom_answers, skin_insights, ai_confidence, skin_tone):
+    return {
+        "report_type": "patient",
+        "title": f"YOUR ASSESSMENT: {assessment_level} PROBABILITY OF ATOPIC DERMATITIS",
+        "summary": f"Overall Confidence: {final_confidence:.2f}",
+        "breakdown": {
+            "ai_analysis": f"{ai_confidence:.2f} confidence",
+            "your_symptoms": "Strong match with AD patterns" if final_confidence > 0.5 else "Partial match with AD patterns",
+            "skin_considerations": f"Analysis considered {skin_tone} skin"
+        },
+        "what_this_means": skin_insights,
+        "next_steps": [
+            "Consult a dermatologist for proper diagnosis",
+            "Use fragrance-free moisturizers daily",
+            "Avoid harsh soaps and known triggers"
+        ]
+    }
+
 AD_QUESTIONS = [
     "Is the affected area itchy?",
     "Do you notice redness or inflammation?",
