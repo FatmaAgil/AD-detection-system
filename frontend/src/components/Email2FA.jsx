@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
+import api from '../utils/api';  // Import the custom API instance
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const Email2FA = () => {
@@ -10,13 +10,12 @@ const Email2FA = () => {
   const location = useLocation();
   const user_id = location.state?.user_id;
   const initialRole = location.state?.role;
-  //const username = location.state?.username; // If you have username from login
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage('');
     try {
-      const res = await axios.post('http://127.0.0.1:8000/api/verify-2fa/', { code, user_id });
+      const res = await api.post('/verify-2fa/', { code, user_id });  // Use api instead of axios
       // Save tokens to localStorage
       localStorage.setItem("access_token", res.data.access);
       localStorage.setItem("refresh_token", res.data.refresh);
@@ -41,13 +40,20 @@ const Email2FA = () => {
     setResending(true);
     setMessage('');
     try {
-      // You may need to POST username/password or user_id depending on your backend
-      await axios.post('http://127.0.0.1:8000/api/resend-2fa/', { user_id });
+      await api.post('/resend-2fa/', { user_id });  // Use api instead of axios
       setMessage('A new 2FA code has been sent to your email.');
     } catch (err) {
       setMessage('Error resending code: ' + (err.response?.data?.detail || err.message));
     }
     setResending(false);
+  };
+
+  // Optional: Add a logout function for clearing tokens (can be used in a navbar)
+  const handleLogout = () => {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('username');
+    navigate('/login');
   };
 
   return (

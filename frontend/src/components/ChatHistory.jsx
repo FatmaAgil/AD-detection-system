@@ -1,63 +1,35 @@
 import React, { useState, useEffect } from "react";
 import UserSidebar from "./UserSidebar";
 import UserNavbar from "./UserNavbar";
-import { loadChats } from "../utils/chatStorage"; // added import
-
-const dummyChats = [
-  {
-    id: 1,
-    date: "2025-10-10 14:23",
-    messages: [
-      { sender: "user", text: "Hi, I need help with my ad scan." },
-      { sender: "ai", text: "Sure! Can you upload the affected images?" },
-      { sender: "user", text: "Here are the images." },
-      { sender: "ai", text: "Scan complete. No suspicious activity detected." },
-    ],
-  },
-  {
-    id: 2,
-    date: "2025-10-09 09:11",
-    messages: [
-      { sender: "user", text: "Can you explain the scan result?" },
-      { sender: "ai", text: "Of course! The scan found no issues." },
-    ],
-  },
-];
+import api from '../utils/api';  // Use the custom API instance
 
 export default function ChatHistory() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [chats, setChats] = useState([]);
+  const [loading, setLoading] = useState(true);
   const sidebarWidth = sidebarCollapsed ? 60 : 220;
 
-  const [chats, setChats] = useState(() => {
-    const stored = loadChats();
-    return stored.length ? stored : dummyChats;
-  });
-
   useEffect(() => {
-    // keep simple: reload on mount; user can click Refresh to re-read
-    const onStorage = () => setChats(loadChats());
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    const fetchChats = async () => {
+      try {
+        const res = await api.get('/chats/');
+        setChats(res.data);
+      } catch (err) {
+        console.error('Error fetching chats:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchChats();
   }, []);
 
-  // Download chat as text file
-  const handleDownload = (chat) => {
-    const content = chat.messages
-      .map((msg) => `${msg.sender === "ai" ? "AI" : "You"}: ${msg.text}`)
-      .join("\n");
-    const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `chat_${chat.id}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleDownloadPdf = (pdfUrl) => {
+    if (pdfUrl) {
+      window.open(pdfUrl, '_blank');
+    }
   };
 
-  const refreshFromStorage = () => {
-    const stored = loadChats();
-    setChats(stored.length ? stored : []);
-  };
+  if (loading) return <div>Loading...</div>;
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #e3f0ff 0%, #f9fbfd 100%)" }}>
@@ -84,9 +56,6 @@ export default function ChatHistory() {
           padding: 32,
         }}>
           <h2 style={{ color: "#1e90e8", marginBottom: 24 }}>Chat History</h2>
-          <div style={{ marginBottom: 12 }}>
-            <button onClick={refreshFromStorage} style={{ marginRight: 8 }}>Refresh</button>
-          </div>
           {chats.length === 0 ? (
             <div style={{ color: "#aaa", fontSize: 16 }}>No chat history found.</div>
           ) : (
@@ -98,10 +67,9 @@ export default function ChatHistory() {
                   padding: 20,
                   boxShadow: "0 2px 8px rgba(33,150,243,0.04)",
                   border: "1px solid #e5e7eb",
-                  position: "relative"
                 }}>
                   <div style={{ fontWeight: "bold", color: "#1e90e8", fontSize: 15, marginBottom: 8 }}>
-                    {chat.date}
+                    {new Date(chat.created_at).toLocaleString()}
                   </div>
                   <div style={{ marginBottom: 12 }}>
                     {chat.messages.map((msg, idx) => (
@@ -124,25 +92,24 @@ export default function ChatHistory() {
                       </div>
                     ))}
                   </div>
-                  <button
-                    onClick={() => handleDownload(chat)}
-                    style={{
-                      position: "absolute",
-                      top: 18,
-                      right: 18,
-                      background: "#1e90e8",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: 8,
-                      padding: "6px 16px",
-                      fontWeight: "bold",
-                      fontSize: 15,
-                      cursor: "pointer",
-                      boxShadow: "0 2px 8px rgba(33,150,243,0.08)",
-                    }}
-                  >
-                    Download
-                  </button>
+                  {chat.pdf_report && (
+                    <button
+                      onClick={() => handleDownloadPdf(chat.pdf_report)}
+                      style={{
+                        background: "#1e90e8",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: 8,
+                        padding: "6px 16px",
+                        fontWeight: "bold",
+                        fontSize: 15,
+                        cursor: "pointer",
+                        boxShadow: "0 2px 8px rgba(33,150,243,0.08)",
+                      }}
+                    >
+                      Download PDF Report
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

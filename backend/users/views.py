@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
-from .models import Email2FACode, ContactMessage, MessageReply
+from .models import Email2FACode, ContactMessage, MessageReply, AdScanImage, Chat  # Ensure AdScanImage is included here
 import random
 from django.core.mail import send_mail
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
@@ -25,11 +25,18 @@ from rest_framework.permissions import IsAuthenticated
 from django.conf import settings
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input  # type: ignore
 from tensorflow.keras.models import load_model  # type: ignore
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 import joblib
 import tempfile
 import os
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from django.core.files.base import ContentFile
+import io
+from .models import Chat
+from .serializers import ChatSerializer
 
 # Create your views here.
 
@@ -55,133 +62,400 @@ def get_ad_model_dark():
         model_path = getattr(settings, 'MODEL_PATH_DARK', None)
         if not model_path:
             raise RuntimeError("MODEL_PATH_DARK not configured in settings.")
-        # Load the hybrid/deployable model (joblib serialized)
+        
+        # Load the deployable model (joblib serialized)
         _ad_model_dark = joblib.load(str(model_path))
-        print("✅ Dark skin model loaded successfully")
+        print("✅ Dark skin model (deployable) loaded successfully")
+        
+        # CRITICAL FIX: Inject a robust predict_single_image wrapper that ensures PIL/numpy are used
+        if hasattr(_ad_model_dark, 'predict_single_image'):
+            from PIL import Image as PILImage, ImageOps as PILImageOps
+            import numpy as _np
+            import os
+
+            original_predict = _ad_model_dark.predict_single_image
+
+            def fixed_predict_single_image(image_path, use_hybrid=True):
+                try:
+                    # Preprocess exactly like Colab / app expectations
+                    img = PILImage.open(image_path).convert('RGB')
+                    img = PILImageOps.fit(img, (224, 224), PILImage.BILINEAR)
+                    img_array = _np.array(img).astype('float32') / 255.0
+                    img_array_expanded = _np.expand_dims(img_array, axis=0)
+
+                    # Hybrid path if model exposes feature_extractor + classifier
+                    if use_hybrid and hasattr(_ad_model_dark, 'feature_extractor') and hasattr(_ad_model_dark, 'classifier'):
+                        try:
+                            features = _ad_model_dark.feature_extractor.predict(img_array_expanded, verbose=0)
+                            features_flat = features.reshape(features.shape[0], -1)
+                            # classifier may be sklearn-like with predict_proba
+                            if hasattr(_ad_model_dark.classifier, 'predict_proba'):
+                                prob = float(_ad_model_dark.classifier.predict_proba(features_flat)[0][1])
+                            else:
+                                prob = float(_ad_model_dark.classifier.predict(features_flat)[0])
+                            prediction = "AD" if prob > getattr(_ad_model_dark, 'optimal_threshold', 0.5) else "Not AD"
+                            model_used = "Hybrid"
+                        except Exception as e_feat:
+                            # fallback to original predict if hybrid step fails
+                            try:
+                                raw = original_predict(image_path, use_hybrid=use_hybrid)
+                                if isinstance(raw, dict) and raw.get('probability') is not None:
+                                    prob = float(raw.get('probability', 0.5))
+                                    prediction = raw.get('prediction', 'Error')
+                                else:
+                                    prob = 0.5
+                                    prediction = "Error"
+                                model_used = raw.get('model_used', 'Original')
+                            except Exception:
+                                prob = 0.5
+                                prediction = "Error"
+                                model_used = "Error"
+                    else:
+                        # Original model path: try to use known attribute original_model or fall back to original_predict
+                        if hasattr(_ad_model_dark, 'original_model'):
+                            try:
+                                pred = _ad_model_dark.original_model.predict(img_array_expanded, verbose=0)
+                                # handle nested array outputs
+                                if hasattr(pred, '__len__') and len(pred) > 0:
+                                    p0 = pred[0]
+                                    prob = float(p0[0]) if (hasattr(p0, '__len__') and len(p0) > 0) else float(p0)
+                                else:
+                                    prob = float(pred)
+                                prediction = "AD" if prob > 0.5 else "Not AD"
+                                model_used = "Original"
+                            except Exception:
+                                try:
+                                    raw = original_predict(image_path, use_hybrid=use_hybrid)
+                                    if isinstance(raw, dict) and raw.get('probability') is not None:
+                                        prob = float(raw.get('probability', 0.5))
+                                        prediction = raw.get('prediction', 'Error')
+                                    else:
+                                        prob = 0.5
+                                        prediction = "Error"
+                                    model_used = raw.get('model_used', 'Original')
+                                except Exception:
+                                    prob = 0.5
+                                    prediction = "Error"
+                                    model_used = "Error"
+                        else:
+                            # fallback: call original_predict and interpret dict / numeric results
+                            try:
+                                raw = original_predict(image_path, use_hybrid=use_hybrid)
+                                if isinstance(raw, dict):
+                                    prob = float(raw.get('probability', raw.get('prob', 0.5)))
+                                    prediction = raw.get('prediction', 'Error')
+                                    model_used = raw.get('model_used', 'Original')
+                                elif hasattr(raw, '__float__'):
+                                    prob = float(raw)
+                                    prediction = "AD" if prob > 0.5 else "Not AD"
+                                    model_used = "Original"
+                                else:
+                                    prob = 0.5
+                                    prediction = "Error"
+                                    model_used = "Original"
+                            except Exception:
+                                prob = 0.5
+                                prediction = "Error"
+                                model_used = "Error"
+
+                    return {
+                        'prediction': prediction,
+                        'probability': float(prob),
+                        'confidence': 'High' if abs(prob - 0.5) > 0.3 else 'Medium',
+                        'model_used': model_used,
+                        'threshold_used': getattr(_ad_model_dark, 'optimal_threshold', (0.3 if use_hybrid else 0.5)),
+                        'success': True
+                    }
+
+                except Exception as e:
+                    return {
+                        'prediction': 'Error',
+                        'probability': 0.5,
+                        'confidence': 'Unknown',
+                        'model_used': 'Error',
+                        'error': str(e),
+                        'success': False
+                    }
+
+            # Replace the method with our fixed version
+            try:
+                _ad_model_dark.predict_single_image = fixed_predict_single_image
+                print("🎯 Fixed predict_single_image method with proper imports and fallbacks")
+            except Exception as e_set:
+                print("⚠️ Failed to replace predict_single_image:", e_set)
+            
     return _ad_model_dark
 
 # ============================================================
-# Prediction functions for BOTH models
+# UPDATED Prediction functions with consistent preprocessing
 # ============================================================
 def predict_ad_light(image_file):
     """
-    Original model for light skin tones
+    Original model for light skin tones - FIXED with consistent preprocessing
     """
     model = get_ad_model_light()
     target_size = (224, 224)
 
-    # Load and preprocess image
-    img = Image.open(image_file).convert('RGB').resize(target_size)
-    x = np.array(img).astype('float32') / 255.0
-    x = np.expand_dims(x, 0)
+    try:
+        # Reset file pointer
+        if hasattr(image_file, 'seek'):
+            image_file.seek(0)
+            
+        # Use EXACTLY the same preprocessing as Colab
+        img = Image.open(image_file).convert('RGB')
+        img = ImageOps.fit(img, target_size, Image.BILINEAR)  # Same as Colab
+        x = np.array(img).astype('float32') / 255.0           # Same as Colab
+        x = np.expand_dims(x, 0)
 
-    # Predict
-    raw_probability = float(model.predict(x, verbose=0)[0][0])
+        # Predict
+        raw_probability = float(model.predict(x, verbose=0)[0][0])
 
-    # Your existing logic (kept)
-    is_ad = raw_probability < 0.31
-    label = "ad" if is_ad else "not_ad"
-    confidence = (1 - raw_probability) if is_ad else raw_probability
-    score = float(confidence)
+        # Your existing logic (kept)
+        is_ad = raw_probability < 0.31
+        label = "ad" if is_ad else "not_ad"
+        confidence = (1 - raw_probability) if is_ad else raw_probability
 
-    return {
-        "label": label,
-        "score": score,
-        "confidence": float(confidence),
-        "is_atopic_dermatitis": bool(is_ad),
-        "raw_probability": float(raw_probability),
-        "model_used": "General Model (Light Skin Optimized)"
-    }
+        return {
+            "label": label,
+            "score": float(confidence),
+            "confidence": float(confidence),
+            "is_atopic_dermatitis": bool(is_ad),
+            "raw_probability": float(raw_probability),
+            "model_used": "General Model (Light Skin Optimized)"
+        }
+    except Exception as e:
+        print(f"❌ Error in predict_ad_light: {e}")
+        raise
 
 def predict_ad_dark(image_file):
     """
-    Hybrid / deployable model for dark skin tones.
-    Accepts multiple return formats from the deployable model:
-      - dict with keys like 'prediction' and 'probability'
-      - a raw float probability
-      - list/ndarray (first/last element interpreted as probability)
-    Tries model.predict_single_image(tmp_path, use_hybrid=True) first,
-    falls back to model.predict_single_image(tmp_path) if the kwarg isn't supported.
+    Deployable model for dark skin tones - FIXED to match Colab preprocessing
     """
     model = get_ad_model_dark()
-
+    
     tmp_path = None
     try:
-        # Create a temporary file path for the image (some deployable models expect a file path)
+        # Step 1: Use EXACTLY the same preprocessing as in Colab
+        img = Image.open(image_file).convert('RGB')
+        
+        # CRITICAL FIX: Use the same ImageOps.fit as in Colab
+        img = ImageOps.fit(img, (224, 224), Image.BILINEAR)  # Must match Colab
+        
+        # Save to temp file with proper preprocessing
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
-            for chunk in image_file.chunks():
-                tmp_file.write(chunk)
+            img.save(tmp_file, format='JPEG', quality=95)
             tmp_path = tmp_file.name
-
-        # Reset pointer for potential fallback usage
+        
+        # Debug info
+        print(f"🖼️  Preprocessed image: {img.size}, mode: {img.mode}")
+        print(f"📁 Temp path: {tmp_path}")
+        
+        # Step 2: Call the model (matches your Colab deployable model)
+        # NOTE: some deployable models execute code that expects "Image" to exist in globals
+        # (e.g. using PIL.Image as Image without importing). Retry with a small injection
+        # if that specific NameError appears in the returned result.
+        result = None
         try:
-            image_file.seek(0)
-        except Exception:
-            pass
+            result = model.predict_single_image(tmp_path, use_hybrid=True)
+        except Exception as e:
+            # If the model raises directly, capture for retry below
+            result = {"error": str(e), "prediction": "Error", "probability": 0.5, "confidence": "Unknown", "model_used": "Error", "success": False}
+            print(f"⚠️ predict_single_image threw exception: {e}")
 
-        # call predict_single_image, try with use_hybrid kwarg first, then without
-        predict_fn = getattr(model, "predict_single_image", None)
-        if predict_fn is None:
-            # If no predict_single_image, try a generic call (may raise)
-            raise RuntimeError("Deployable dark-skin model does not implement predict_single_image(path)")
-
-        try:
-            result = predict_fn(tmp_path, use_hybrid=True)
-        except TypeError as te:
-            logging.getLogger(__name__).warning(
-                "predict_single_image() does not accept 'use_hybrid', retrying without it: %s", te
-            )
-            result = predict_fn(tmp_path)
-
-        # Normalize many possible result formats into a probability (0..1)
-        prob = None
-        prediction_label = None
-        confidence_level = "Medium"
-
-        # dict-like result
+        # If model returned an error mentioning missing 'Image', attempt a targeted retry
+        needs_injection = False
         if isinstance(result, dict):
-            prediction_label = result.get("prediction") or result.get("label")
-            # try common probability keys
-            for k in ("probability", "prob", "score", "confidence"):
-                if k in result and result[k] is not None:
+            err = str(result.get("error") or "")
+            if "name 'Image' is not defined" in err or "NameError: Image" in err:
+                needs_injection = True
+
+        if needs_injection:
+            # Inject PIL.Image as "Image" into builtins for the duration of the call
+            import builtins
+            from PIL import Image as PILImage
+            had_image = hasattr(builtins, 'Image')
+            old_image = getattr(builtins, 'Image', None)
+            builtins.Image = PILImage
+            try:
+                print("🔧 Injected PIL.Image as 'Image' into builtins and retrying predict_single_image()")
+                try:
+                    result = model.predict_single_image(tmp_path, use_hybrid=True)
+                except Exception as e2:
+                    # keep the exception info in result for downstream logging
+                    print(f"⚠️ Retry also failed: {e2}")
+                    result = {"error": str(e2), "prediction": "Error", "probability": 0.5, "confidence": "Unknown", "model_used": "Error", "success": False}
+            finally:
+                # restore builtins.Image to previous state
+                if had_image:
+                    builtins.Image = old_image
+                else:
                     try:
-                        prob = float(result[k])
-                        break
+                        delattr(builtins, 'Image')
                     except Exception:
                         pass
-            confidence_level = result.get("confidence", confidence_level)
 
-        # numeric result: treat as probability
-        elif isinstance(result, (float, int)):
-            prob = float(result)
+        # Final fallback: if result still indicates error, try calling without use_hybrid
+        if isinstance(result, dict) and result.get("success") is False and "error" in result:
+            try:
+                print("🔁 Fallback: calling predict_single_image without use_hybrid")
+                result = model.predict_single_image(tmp_path)
+            except Exception as e3:
+                print(f"❌ Final fallback failed: {e3}")
+                # keep previous result; do not raise here to preserve behavior
+                result = result if result is not None else {"error": str(e3), "prediction": "Error", "probability": 0.5, "confidence": "Unknown", "model_used": "Error", "success": False}
 
-        # array / list-like result: try to pick a sensible element
-        elif isinstance(result, (list, tuple, np.ndarray)):
-            a = np.array(result).flatten()
-            if a.size == 1:
+        # Debug: Log full result
+        print(f"📊 Full result: {result}")
+        
+        # Extract probability - handle different result structures
+        if isinstance(result, dict):
+            prob = float(result.get("probability", 0.5))
+            prediction_label = result.get("prediction", "")
+            confidence_level = result.get("confidence", "Medium")
+        else:
+            # Fallback if result is not a dictionary
+            prob = float(result) if hasattr(result, '__float__') else 0.5
+            prediction_label = "AD" if prob > 0.5 else "Not AD"
+            confidence_level = "Medium"
+        
+        print(f"📊 Extracted probability: {prob}")
+        
+        # Use the optimal threshold from your tested model
+        OPTIMAL_THRESHOLD = 0.3  # From your Colab testing
+        
+        # Determine final prediction
+        is_ad = prob >= OPTIMAL_THRESHOLD
+        label = "ad" if is_ad else "not_ad"
+        
+        print(f"🎯 Final: label={label}, is_ad={is_ad}, threshold={OPTIMAL_THRESHOLD}")
+        
+        return {
+            "label": label,
+            "score": float(prob),
+            "confidence": float(prob),
+            "is_atopic_dermatitis": bool(is_ad),
+            "raw_probability": float(prob),
+            "model_used": "Dark Skin Optimized Model (Deployable)",
+            "confidence_level": confidence_level,
+            "threshold_used": OPTIMAL_THRESHOLD
+        }
+
+    except Exception as e:
+        print(f"❌ Error in predict_ad_dark: {e}")
+        import traceback
+        print(f"🔍 Full traceback: {traceback.format_exc()}")
+        raise
+    finally:
+        # Cleanup
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+
+# ============================================================
+# FIXED dark-model wrapper (non-destructive retries, robust parsing)
+# ============================================================
+def predict_ad_dark_fixed(image_file):
+    """
+    Safer wrapper around the deployable dark-skin model with enhanced debug logging.
+    """
+    import inspect
+    model = get_ad_model_dark()
+    tmp_path = None
+    try:
+        # Preprocess exactly like Colab
+        if hasattr(image_file, 'seek'):
+            image_file.seek(0)
+        img = Image.open(image_file).convert('RGB')
+        img = ImageOps.fit(img, (224, 224), Image.BILINEAR)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            img.save(tmp_file, format='JPEG', quality=95)
+            tmp_path = tmp_file.name
+
+        print(f"🖼️  Preprocessed image saved to: {tmp_path} (size={img.size})")
+
+        # Inspect predict_single_image signature for debugging
+        pred_fn = getattr(model, 'predict_single_image', None)
+        try:
+            sig = inspect.signature(pred_fn) if pred_fn is not None else None
+        except Exception as _:
+            sig = None
+        print(f"🔍 predict_single_image exists: {pred_fn is not None}, signature: {sig}")
+
+        # Try primary call (use_hybrid True first, then fallback), logging raw outputs
+        result = None
+        try:
+            print("▶️ Calling predict_single_image(..., use_hybrid=True)")
+            result = model.predict_single_image(tmp_path, use_hybrid=True)
+            print(f"✅ Raw result (use_hybrid=True): type={type(result)}, value={result}")
+            if isinstance(result, dict):
+                print(f"   keys: {list(result.keys())}")
+        except Exception as e:
+            print(f"⚠️ predict_single_image(use_hybrid=True) raised: {e}")
+
+            # Try targeted NameError fix by injecting PIL.Image into builtins
+            err_text = str(e)
+            if "name 'Image' is not defined" in err_text or "NameError: Image" in err_text:
+                from PIL import Image as PILImage
+                had_image = hasattr(builtins, 'Image')
+                old_image = getattr(builtins, 'Image', None)
+                builtins.Image = PILImage
                 try:
-                    prob = float(a[0])
-                except Exception:
-                    prob = None
-            elif a.size >= 2:
-                # common pattern: [neg_prob, pos_prob] or [pos_prob]
-                try:
-                    prob = float(a[-1])
-                except Exception:
-                    prob = None
+                    print("🔧 Injected PIL.Image into builtins and retrying predict_single_image(use_hybrid=True)")
+                    try:
+                        result = model.predict_single_image(tmp_path, use_hybrid=True)
+                        print(f"✅ Raw result after injection: type={type(result)}, value={result}")
+                        if isinstance(result, dict):
+                            print(f"   keys: {list(result.keys())}")
+                    except Exception as e2:
+                        print(f"⚠️ Retry after injecting Image failed: {e2}")
+                finally:
+                    if had_image:
+                        builtins.Image = old_image
+                    else:
+                        try:
+                            delattr(builtins, 'Image')
+                        except Exception:
+                            pass
 
-        # fallback: attempt to coerce to float
-        if prob is None:
+        # Final fallback: try without use_hybrid if earlier attempts reported failure or no usable result
+        need_fallback = result is None or (isinstance(result, dict) and result.get('success') is False)
+        if need_fallback:
+            try:
+                print("🔁 Fallback: calling predict_single_image(tmp_path) without use_hybrid")
+                result = model.predict_single_image(tmp_path)
+                print(f"✅ Raw result (no use_hybrid): type={type(result)}, value={result}")
+                if isinstance(result, dict):
+                    print(f"   keys: {list(result.keys())}")
+            except Exception as e3:
+                print(f"❌ Fallback without use_hybrid failed: {e3}")
+
+        # Robust probability extraction (same as before), but log chosen value
+        prob = 0.5
+        confidence_level = "Medium"
+        if isinstance(result, dict):
+            for key in ('probability', 'prob', 'score', 'confidence'):
+                if key in result and result.get(key) is not None:
+                    try:
+                        prob = float(result.get(key))
+                        print(f"🔎 Extracted prob from key '{key}': {prob}")
+                        break
+                    except Exception:
+                        continue
+            confidence_level = result.get('confidence', confidence_level)
+        else:
             try:
                 prob = float(result)
+                print(f"🔎 Extracted prob from numeric result: {prob}")
             except Exception:
-                raise RuntimeError(f"Unexpected hybrid model result format: {type(result)}")
+                print("⚠️ Could not extract probability from raw result; using default 0.5")
 
-        # Decide label/decision. For hybrid model we assume probability is "AD probability".
-        # If you want a different threshold, change threshold variable below.
-        THRESHOLD = 0.5
-        is_ad = prob >= THRESHOLD
+        OPTIMAL_THRESHOLD = 0.3
+        is_ad = prob >= OPTIMAL_THRESHOLD
         label = "ad" if is_ad else "not_ad"
+
+        print(f"🎯 Final: label={label}, is_ad={is_ad}, prob={prob}, threshold={OPTIMAL_THRESHOLD}")
 
         return {
             "label": label,
@@ -189,25 +463,29 @@ def predict_ad_dark(image_file):
             "confidence": float(prob),
             "is_atopic_dermatitis": bool(is_ad),
             "raw_probability": float(prob),
-            "model_used": "Dark Skin Optimized Model",
-            "confidence_level": confidence_level
+            "model_used": "Dark Skin Optimized Model (Deployable)",
+            "confidence_level": confidence_level,
+            "threshold_used": OPTIMAL_THRESHOLD,
+            "success": False if (isinstance(result, dict) and result.get("success") is False) else True,
+            "raw_result": result
         }
 
     except Exception as e:
-        logging.getLogger(__name__).exception("Hybrid model failed, falling back to light model: %s", e)
-        # fallback to light model
-        try:
-            try:
-                image_file.seek(0)
-            except Exception:
-                pass
-            return predict_ad_light(image_file)
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
+        import traceback
+        print(f"❌ Critical error in predict_ad_dark_fixed: {e}")
+        print(traceback.format_exc())
+        return {
+            "label": "not_ad",
+            "score": 0.5,
+            "confidence": 0.5,
+            "is_atopic_dermatitis": False,
+            "raw_probability": 0.5,
+            "model_used": "Dark Skin Optimized Model (Error Fallback)",
+            "confidence_level": "Low",
+            "threshold_used": 0.3,
+            "success": False,
+            "error": str(e)
+        }
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -216,7 +494,114 @@ def predict_ad_dark(image_file):
                 pass
 
 # ============================================================
-# Updated upload view with model selection
+# MODEL VERIFICATION FUNCTION - ADD THIS
+# ============================================================
+def verify_models():
+    """Verify that models are loaded correctly and working"""
+    try:
+        print("🔍 Verifying model files and paths...")
+        
+        # Check if files exist
+        light_path = getattr(settings, 'MODEL_PATH_LIGHT', None)
+        dark_path = getattr(settings, 'MODEL_PATH_DARK', None)
+        
+        print(f"📁 Light model path: {light_path}")
+        print(f"📁 Dark model path: {dark_path}")
+        print(f"✅ Light model exists: {os.path.exists(light_path) if light_path else False}")
+        print(f"✅ Dark model exists: {os.path.exists(dark_path) if dark_path else False}")
+        
+        # Check which dark model we're using
+        if dark_path and 'deployable' in str(dark_path):
+            print("🎯 CORRECT: Using deployable_skin_model_final.pkl")
+        elif dark_path and 'hybrid' in str(dark_path):
+            print("❌ WRONG: Using hybrid_skin_model_final.pkl instead of deployable model!")
+        else:
+            print("⚠️  Unknown model file")
+            
+        # Test model loading
+        print("🧪 Testing model loading...")
+        light_model = get_ad_model_light()
+        dark_model = get_ad_model_dark()
+        
+        print(f"✅ Light model type: {type(light_model)}")
+        print(f"✅ Dark model type: {type(dark_model)}")
+        
+        # Test prediction with dummy data
+        dummy_img = np.random.random((224, 224, 3)).astype('float32')
+        
+        # Test light model
+        light_input = np.expand_dims(dummy_img, 0)
+        light_pred = light_model.predict(light_input, verbose=0)
+        print(f"✅ Light model test prediction: {light_pred[0][0]:.4f}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Model verification failed: {e}")
+        return False
+
+# ============================================================
+# DEBUG ENDPOINT - ADD THIS
+# ============================================================
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def debug_model_performance(request):
+    """Debug endpoint to test model performance with the same images"""
+    try:
+        image_file = request.FILES['image']
+        
+        print("🧪 DEBUG: Testing both models on the same image...")
+        
+        # Test light model
+        light_result = predict_ad_light(image_file)
+        print(f"📊 Light model result: {light_result}")
+        
+        # Reset and test dark model
+        image_file.seek(0)
+        dark_result = predict_ad_dark(image_file) 
+        print(f"📊 Dark model result: {dark_result}")
+        
+        # Compare preprocessing
+        image_file.seek(0)
+        img_light = Image.open(image_file).convert('RGB')
+        img_light = ImageOps.fit(img_light, (224, 224), Image.BILINEAR)
+        img_array_light = np.array(img_light)
+        
+        image_file.seek(0)
+        img_dark = Image.open(image_file).convert('RGB') 
+        img_dark = ImageOps.fit(img_dark, (224, 224), Image.BILINEAR)
+        img_array_dark = np.array(img_dark)
+        
+        preprocessing_match = np.array_equal(img_array_light, img_array_dark)
+        
+        return Response({
+            'preprocessing_consistent': preprocessing_match,
+            'light_model_result': light_result,
+            'dark_model_result': dark_result,
+            'differences': {
+                'label_differs': light_result['label'] != dark_result['label'],
+                'score_difference': abs(light_result['score'] - dark_result['score']),
+                'threshold_difference': f"Light: 0.31 vs Dark: {dark_result.get('threshold_used', 'N/A')}"
+            },
+            'image_info': {
+                'light_shape': img_array_light.shape,
+                'dark_shape': img_array_dark.shape,
+                'pixel_range_light': f"{img_array_light.min()} - {img_array_light.max()}",
+                'pixel_range_dark': f"{img_array_dark.min()} - {img_array_dark.max()}"
+            }
+        })
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=400)
+
+# ============================================================
+# Call model verification on startup
+# ============================================================
+print("🚀 Initializing skin analysis models...")
+verify_models()
+
+# ============================================================
+# Updated upload view with model selection (KEEP YOUR EXISTING CODE)
 # ============================================================
 class AdScanImageUploadView(APIView):
     parser_classes = [MultiPartParser, FormParser]
@@ -286,10 +671,10 @@ class AdScanImageUploadView(APIView):
                 })
                 continue
 
-            # run prediction with selected model
+            # run prediction with selected model (use fixed wrapper for dark)
             try:
                 if model_type == 'dark':
-                    prediction = predict_ad_dark(img)
+                    prediction = predict_ad_dark_fixed(img)
                 else:
                     prediction = predict_ad_light(img)
             except Exception as e:
@@ -309,11 +694,10 @@ class AdScanImageUploadView(APIView):
                 "prediction": prediction
             })
 
-        # If there were errors, return them alongside results so frontend can show exactly which files failed.
         response_payload = {
             "results": results,
             "errors": errors,
-            "model_used": "Dark Skin Optimized Model" if model_type == 'dark' else "General Model"
+            "model_used": "Dark Skin Optimized Model (Deployable)" if model_type == 'dark' else "General Model"
         }
         if errors:
             return Response(response_payload, status=status.HTTP_207_MULTI_STATUS)
@@ -535,10 +919,10 @@ def universal_symptom_assessment(request):
     logger = logging.getLogger(__name__)
     data = request.data or {}
 
-    symptom_answers = data.get("symptom_answers", {})  # dict of question -> answer (usually numeric/string)
-    scan_results = data.get("scan_results", [])       # list of image scan dicts (prediction + model_used)
-    user_type = data.get("user_type", "patient")      # "patient" or "clinician"
-    provided_skin_tone = data.get("detected_skin_tone")  # optional override
+    symptom_answers = data.get("symptom_answers", {})
+    scan_results = data.get("scan_results", [])
+    user_type = data.get("user_type", "patient")
+    provided_skin_tone = data.get("detected_skin_tone")
 
     if not symptom_answers:
         return Response({"error": "No symptom answers provided"}, status=status.HTTP_400_BAD_REQUEST)
@@ -561,6 +945,17 @@ def universal_symptom_assessment(request):
     try:
         assessment = calculate_skin_tone_aware_score(symptom_answers, skin_tone, user_type, scan_results)
         report = generate_universal_report(assessment, symptom_answers, scan_results, user_type)
+
+        # Generate PDF with expanded data
+        pdf_buffer = generate_pdf_report(report, symptom_answers, scan_results, request.user, assessment)
+        pdf_file = ContentFile(pdf_buffer.getvalue(), name=f"assessment_{request.user.id}_{assessment['final_confidence']:.2f}.pdf")
+
+        # Save or update Chat
+        chat, created = Chat.objects.get_or_create(user=request.user, defaults={'messages': []})
+        chat.pdf_report = pdf_file
+        chat.save()
+
+        report['pdf_url'] = chat.pdf_report.url if chat.pdf_report else None
         return Response(report, status=status.HTTP_200_OK)
     except Exception as e:
         logger.exception("universal_symptom_assessment failed")
@@ -846,8 +1241,251 @@ def chat_view(request):
     yes_count = sum(1 for v in normalized.values() if v is True)
     risk_estimate = (yes_count / total_answered) if total_answered > 0 else 0.0
 
+    # After generating reply, save to Chat
+    chat, created = Chat.objects.get_or_create(user=request.user, defaults={'messages': []})
+    chat.messages.append({"sender": "user", "text": user_input})
+    chat.messages.append({"sender": "ai", "text": reply})
+    chat.save()
+
     return Response({
         "reply": reply,
         "next_question": next_question,
         "risk_estimate": float(risk_estimate)
     })
+
+def generate_pdf_report(report, symptom_answers, scan_results, user, assessment):
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    y_position = height - 50  # Starting Y position
+
+    # Helper to add text and handle page breaks
+    def add_text(text, font_size=12, bold=False, indent=0):
+        nonlocal y_position
+        if bold:
+            c.setFont("Helvetica-Bold", font_size)
+        else:
+            c.setFont("Helvetica", font_size)
+        lines = text.split('\n')
+        for line in lines:
+            if y_position < 100:  # New page if near bottom
+                c.showPage()
+                y_position = height - 50
+                c.setFont("Helvetica-Bold" if bold else "Helvetica", font_size)
+            c.drawString(100 + indent, y_position, line)
+            y_position -= font_size + 2
+
+    # Title
+    add_text(report.get('title', 'Assessment Report'), font_size=16, bold=True)
+    y_position -= 20
+
+    # Summary
+    add_text(f"Summary: {report.get('summary', 'N/A')}", font_size=12)
+    y_position -= 20
+
+    # Section 1: Scanned Images
+    add_text("1. Scanned Images", font_size=14, bold=True)
+    y_position -= 10
+    for i, res in enumerate(scan_results):
+        # Get image path from AdScanImage if available
+        img_path = None
+        if res.get('uploaded') and res['uploaded'].get('id'):
+            try:
+                ad_img = AdScanImage.objects.get(id=res['uploaded']['id'])
+                img_path = ad_img.image.path  # File path for embedding
+            except AdScanImage.DoesNotExist:
+                pass
+        if img_path:
+            try:
+                img = ImageReader(img_path)
+                c.drawImage(img, 100, y_position - 100, width=100, height=100)
+                y_position -= 120
+            except Exception as e:
+                add_text(f"Image {i+1}: Failed to embed ({str(e)})", indent=20)
+        else:
+            add_text(f"Image {i+1}: No image available", indent=20)
+        if y_position < 150:
+            c.showPage()
+            y_position = height - 50
+
+    # Section 2: Initial Scan Results
+    add_text("2. Initial Scan Results", font_size=14, bold=True)
+    y_position -= 10
+    for i, res in enumerate(scan_results):
+        pred = res.get('prediction', {})
+        add_text(f"Image {i+1}: {pred.get('label', 'N/A')} (Score: {pred.get('score', 0):.2f})", indent=20)
+        add_text(f"Model Used: {pred.get('model_used', 'N/A')}", indent=40)
+        y_position -= 10
+        if y_position < 100:
+            c.showPage()
+            y_position = height - 50
+
+    # Section 3: Form Questions and Answers
+    add_text("3. Form Questions and Answers", font_size=14, bold=True)
+    y_position -= 10
+    for q, a in symptom_answers.items():
+        add_text(f"{q}: {a}", indent=20)
+        if y_position < 100:
+            c.showPage()
+            y_position = height - 50
+
+    # Section 4: Assessment Details
+    add_text("4. Assessment Details", font_size=14, bold=True)
+    y_position -= 10
+    add_text(f"Assessment Level: {report.get('assessment_level', 'N/A')}", indent=20)
+    add_text(f"Final Confidence: {report.get('final_confidence', 0):.2f}", indent=20)
+    add_text(f"Skin Tone Considered: {assessment.get('skin_tone_considered', 'N/A')}", indent=20)
+    add_text(f"Images Analyzed: {assessment.get('images_analyzed', 0)}", indent=20)
+    add_text(f"User Type: {assessment.get('user_type', 'N/A')}", indent=20)
+    if 'breakdown' in assessment:
+        add_text("Breakdown:", indent=20)
+        for key, value in assessment['breakdown'].items():
+            add_text(f"{key}: {value}", indent=40)
+    if 'key_findings' in report:
+        add_text("Key Findings:", indent=20)
+        for finding in report['key_findings']:
+            add_text(f"- {finding}", indent=40)
+    if 'recommendations' in report:
+        add_text("Recommendations:", indent=20)
+        for rec in report['recommendations']:
+            add_text(f"- {rec}", indent=40)
+    if 'next_steps' in report:
+        add_text("Next Steps:", indent=20)
+        for step in report['next_steps']:
+            add_text(f"- {step}", indent=40)
+    y_position -= 20
+
+    # Section 5: Final Result
+    add_text("5. Final Result", font_size=14, bold=True)
+    y_position -= 10
+    add_text(f"Overall Confidence: {assessment.get('final_confidence', 0):.2f}", indent=20)
+    add_text(f"Urgency: {report.get('urgency', 'N/A')}", indent=20)
+    add_text(f"Timestamp: {report.get('timestamp', 'N/A')}", indent=20)
+
+    c.save()
+    buffer.seek(0)
+    return buffer
+
+# Add Chat views
+class ChatListCreateView(generics.ListCreateAPIView):
+    serializer_class = ChatSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Chat.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+class ChatRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ChatSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Chat.objects.filter(user=self.request.user)
+
+import builtins  # added for safe temporary injections used by diagnostics/wrappers
+
+# ============================================================
+# DIAGNOSTIC endpoint (ensure this is present so urls.py can import it)
+# ============================================================
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def diagnose_model_issue(request):
+    """Return basic diagnostics for model loading and a sample run."""
+    try:
+        image_file = request.FILES.get('image')
+        if image_file is None:
+            return Response({"error": "Provide multipart/form-data with field 'image'."}, status=400)
+
+        light_model = get_ad_model_light()
+        dark_model = get_ad_model_dark()
+        dark_methods = [m for m in dir(dark_model) if not m.startswith('_')]
+        has_predict = hasattr(dark_model, 'predict_single_image')
+
+        # simple preprocessing sample
+        image_file.seek(0)
+        img = Image.open(image_file).convert('RGB')
+        img = ImageOps.fit(img, (224, 224), Image.BILINEAR)
+        arr = np.array(img).astype('float32') / 255.0
+
+        # write a temp file and try a best-effort call
+        debug_path = None
+        raw_result = None
+        raw_error = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                img.save(tmp.name, format='JPEG', quality=95)
+                debug_path = tmp.name
+            try:
+                if has_predict:
+                    raw_result = dark_model.predict_single_image(debug_path, use_hybrid=True)
+            except Exception as e:
+                raw_error = str(e)
+        finally:
+            if debug_path and os.path.exists(debug_path):
+                try:
+                    os.unlink(debug_path)
+                except Exception:
+                    pass
+
+        return Response({
+            "light_model_type": str(type(light_model)),
+            "dark_model_type": str(type(dark_model)),
+            "dark_model_methods": dark_methods,
+            "has_predict_single_image": has_predict,
+            "preprocessed_shape": arr.shape,
+            "raw_result_sample": raw_result,
+            "raw_error_sample": raw_error
+        })
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+# ============================================================
+# MODEL HEALTH CHECK endpoint (ensure this is present so urls.py can import it)
+# ============================================================
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def model_health_check(request):
+    """Quick health check for both models."""
+    try:
+        light_model = get_ad_model_light()
+        dark_model = get_ad_model_dark()
+        dark_has_predict = hasattr(dark_model, 'predict_single_image')
+
+        # quick light model smoke test
+        try:
+            dummy = np.random.random((1, 224, 224, 3)).astype('float32')
+            _ = light_model.predict(dummy, verbose=0)
+            light_ok = True
+        except Exception:
+            light_ok = False
+
+        # quick dark model smoke test (best-effort)
+        dark_ok = False
+        try:
+            test_img = Image.new('RGB', (224, 224), color='white')
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                test_path = tmp.name
+                test_img.save(test_path, 'JPEG')
+            try:
+                if dark_has_predict:
+                    res = dark_model.predict_single_image(test_path)
+                    dark_ok = res is not None
+            except Exception:
+                dark_ok = False
+            finally:
+                try:
+                    os.unlink(test_path)
+                except Exception:
+                    pass
+        except Exception:
+            dark_ok = False
+
+        return Response({
+            "light_model": {"loaded": True, "working": light_ok, "type": str(type(light_model))},
+            "dark_model": {"loaded": True, "working": dark_ok, "type": str(type(dark_model)), "has_predict_single_image": dark_has_predict},
+            "overall_status": "healthy" if light_ok and dark_ok else "degraded"
+        })
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)

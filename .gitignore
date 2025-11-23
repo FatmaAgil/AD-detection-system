@@ -75,3 +75,4 @@ Thumbs.db
 backend/ad_models/*.keras
 # Ignore uploaded ad scan images
 backend/media/adscan_images/
+backend/ad_models/*.pkl
