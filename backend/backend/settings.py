@@ -13,6 +13,7 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 import logging
+from datetime import timedelta  # Add this import at the top
 
 load_dotenv() # take environment variables from .env.
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -159,10 +160,19 @@ REST_FRAMEWORK = {
     ),
 }
 
+# Add JWT settings for longer token lifetimes
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),  # Access token lasts 1 hour (adjust as needed for your app)
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),  # Refresh token lasts 7 days
+    'ROTATE_REFRESH_TOKENS': True,  # Issue a new refresh token on each refresh
+    'BLACKLIST_AFTER_ROTATION': True,  # Blacklist old refresh tokens for security
+    'UPDATE_LAST_LOGIN': False,  # Optional: Disable if you don't need to update last login
+}
+
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # Add these to your settings.py
 MODEL_PATH_LIGHT = BASE_DIR / 'ad_models' / 'ad_detection_cnn_model.keras'  # Your original model
-MODEL_PATH_DARK = BASE_DIR / 'ad_models' / 'hybrid_skin_model_final.pkl'    # Your new hybrid model
+MODEL_PATH_DARK = BASE_DIR / 'ad_models' / 'deployable_skin_model_final.pkl'    # Your new hybrid model
 # MODEL_PATH = BASE_DIR / 'ad_models' / 'ad_detection_cnn_model.keras'

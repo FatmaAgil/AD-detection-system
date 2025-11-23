@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.contrib.postgres.fields import JSONField
 
 class Profile(models.Model):
     ROLE_CHOICES = (
@@ -46,4 +47,19 @@ class MessageReply(models.Model):
 class AdScanImage(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     image = models.ImageField(upload_to='adscan_images/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+class Chat(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    messages = models.JSONField(default=list)  # Store list of {sender, text}
+    pdf_report = models.FileField(upload_to='chat_reports/', blank=True, null=True)  # PDF file
+
+    def __str__(self):
+        return f"Chat {self.id} by {self.user.username}"
+
+class ChatImage(models.Model):
+    chat = models.ForeignKey(Chat, related_name="images", on_delete=models.CASCADE)
+    file = models.ImageField(upload_to="chat_images/")
     uploaded_at = models.DateTimeField(auto_now_add=True)

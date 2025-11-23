@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
-from .models import ContactMessage, MessageReply, AdScanImage
+from .models import ContactMessage, MessageReply, AdScanImage, Chat
 from django.conf import settings
 
 class UserSerializer(serializers.ModelSerializer):
@@ -87,3 +87,8 @@ class AdScanSerializer(serializers.Serializer):
                 raise serializers.ValidationError('Invalid image type. Allowed types: jpeg, png.')
 
         return value
+
+class ChatSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Chat
+        fields = ['id', 'messages', 'pdf_report', 'created_at']
