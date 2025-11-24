@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import admin_stats, RegisterView, LoginView, Verify2FAView, CreateAdminView, Resend2FAView, ContactMessageListCreateView, UserProfileView, UserContactMessagesView, AdScanImageUploadView, AdScanAPIView, universal_symptom_assessment, ChatListCreateView, ChatRetrieveUpdateDestroyView, diagnose_model_issue, model_health_check, debug_model_performance, save_adscan, get_scan_history, get_scan_details, download_scan_pdf, delete_scan
+from .views import admin_stats, admin_analytics, RegisterView, LoginView, Verify2FAView, CreateAdminView, Resend2FAView, ContactMessageListCreateView, UserProfileView, UserContactMessagesView, AdScanImageUploadView, AdScanAPIView, universal_symptom_assessment, ChatListCreateView, ChatRetrieveUpdateDestroyView, diagnose_model_issue, model_health_check, debug_model_performance, save_adscan, get_scan_history, get_scan_details, download_scan_pdf, delete_scan
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import UserListCreateView, UserRetrieveUpdateDestroyView, MessageReplyListCreateView, ContactMessageUpdateDeleteView, MessageReplyUpdateView
 
@@ -23,6 +23,7 @@ urlpatterns = [
     path('api/adscan/', AdScanAPIView.as_view(), name='adscan-single'),
     path('universal-assessment/', universal_symptom_assessment, name='universal-assessment'),
     path("admin/stats/", admin_stats, name="admin-stats"),
+    path("admin/analytics/", admin_analytics, name="admin-analytics"),
     path('chats/', ChatListCreateView.as_view(), name='chat-list-create'),
     path('chats/<int:pk>/', ChatRetrieveUpdateDestroyView.as_view(), name='chat-detail'),
     path('api/model-diagnose/', diagnose_model_issue, name='model-diagnose'),
