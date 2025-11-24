@@ -247,23 +247,8 @@ export default function UniversalSymptomForm({ scanResults = [], userType = "pat
             <div style={{ color: "#334155", marginBottom: 8 }}>{report.summary || report.what_this_means || ""}</div>
             <div style={{ fontWeight: 700 }}>Final confidence: {(report.final_confidence != null) ? (report.final_confidence).toFixed(2) : "n/a"}</div>
 
-            {report.recommendations && Array.isArray(report.recommendations) && (
-              <>
-                <div style={{ marginTop: 8, fontWeight: 700 }}>Recommendations</div>
-                <ul style={{ marginTop: 6 }}>
-                  {report.recommendations.map((rec, i) => <li key={i}>{rec}</li>)}
-                </ul>
-              </>
-            )}
-
-            {report.next_steps && Array.isArray(report.next_steps) && (
-              <>
-                <div style={{ marginTop: 8, fontWeight: 700 }}>Next steps</div>
-                <ul style={{ marginTop: 6 }}>
-                  {report.next_steps.map((s, i) => <li key={i}>{s}</li>)}
-                </ul>
-              </>
-            )}
+            {/* Recommendations/Next steps moved to AdScan Recommendations section */}
+            {/* keep only core summary and confidence here */}
           </div>
         )}
       </form>
