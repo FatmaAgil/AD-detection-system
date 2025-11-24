@@ -1737,3 +1737,43 @@ def delete_scan(request, chat_id):
         return Response({"error": "Scan not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def user_dashboard(request):
+    """
+    User dashboard summary:
+      - totals: total_scans, pdf_reports, chat_sessions, recommendations
+      - recent_scans: last 5 Chat entries for the user (serialized)
+    """
+    try:
+        user = request.user
+        total_scans = Chat.objects.filter(user=user).count()
+        pdf_reports = Chat.objects.filter(user=user, pdf_report__isnull=False).count()
+        chat_sessions = total_scans  # Chats represent saved scan sessions
+
+        # Best-effort recommendations count: look for messages meta keys that indicate recommendations
+        recommendations = 0
+        for c in Chat.objects.filter(user=user).only("messages"):
+            msgs = c.messages or []
+            for m in msgs:
+                if isinstance(m, dict):
+                    meta = m.get("meta") or {}
+                    if meta.get("recommendation") or meta.get("recommendation_pending") or meta.get("follow_up"):
+                        recommendations += 1
+
+        recent_qs = Chat.objects.filter(user=user).order_by("-created_at")[:5]
+        recent_serialized = ChatSerializer(recent_qs, many=True, context={"request": request}).data
+
+        payload = {
+            "totals": {
+                "total_scans": total_scans,
+                "pdf_reports": pdf_reports,
+                "chat_sessions": chat_sessions,
+                "recommendations": recommendations
+            },
+            "recent_scans": recent_serialized
+        }
+        return Response(payload)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

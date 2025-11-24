@@ -861,7 +861,7 @@ export default function AdScan() {
           </div>
         </div>
 
-        {/* Section 5: Recommendation Section (Dummy) */}
+        {/* Section 5: Recommendation Section */}
         <div
           style={{
             maxWidth: 700,
@@ -869,14 +869,42 @@ export default function AdScan() {
             background: "#fff",
             borderRadius: 16,
             boxShadow: "0 2px 8px rgba(33,150,243,0.04)",
-            padding: 32,
+            padding: 24,
           }}
         >
           <h2 style={{ color: "#1e90e8", marginBottom: 12 }}>5. Recommendations</h2>
-          <ul style={{ fontSize: 17, paddingLeft: 24, color: "#64748b" }}>
-            <li>Continue monitoring for unusual ads.</li>
-            <li>Report any suspicious content.</li>
-          </ul>
+          {universalReport ? (
+            <>
+              {Array.isArray(universalReport.recommendations) && universalReport.recommendations.length > 0 ? (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Recommendations</div>
+                  <ul style={{ paddingLeft: 20, color: "#374151" }}>
+                    {universalReport.recommendations.map((rec, i) => (
+                      <li key={i} style={{ marginBottom: 6 }}>{rec}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {Array.isArray(universalReport.next_steps) && universalReport.next_steps.length > 0 ? (
+                <div>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Next Steps</div>
+                  <ul style={{ paddingLeft: 20, color: "#374151" }}>
+                    {universalReport.next_steps.map((step, i) => (
+                      <li key={i} style={{ marginBottom: 6 }}>{step}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                // If there are no recommendations/next steps, show a small hint
+                ( !(Array.isArray(universalReport.recommendations) && universalReport.recommendations.length > 0) ) && (
+                  <div style={{ color: "#64748b" }}>Complete an assessment to view personalized recommendations.</div>
+                )
+              )}
+            </>
+          ) : (
+            <div style={{ color: "#64748b" }}>Complete an assessment to view personalized recommendations.</div>
+          )}
         </div>
       </div>
     </div>
