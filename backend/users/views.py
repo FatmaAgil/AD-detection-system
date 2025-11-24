@@ -39,6 +39,8 @@ import io
 from .models import Chat
 from .serializers import ChatSerializer
 from django.http import FileResponse  # <-- added FileResponse import
+from django.utils import timezone
+from datetime import timedelta
 
 # Create your views here.
 
@@ -913,6 +915,108 @@ def admin_stats(request):
     """
     user_count = User.objects.count()
     return Response({"user_count": user_count})
+
+# Admin analytics
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_analytics(request):
+    """
+    Admin analytics:
+      - totals (users, scans, pdfs, images analyzed)
+      - scans per day (last 30 days)
+      - model usage distribution
+      - average risk estimate (if available)
+      - recent scans (id, created_at, model_used, risk_estimate, has_pdf)
+    """
+    # only allow admins
+    try:
+        profile = getattr(request.user, "profile", None)
+        if not profile or getattr(profile, "role", "") != "admin":
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+
+        now = timezone.now()
+        since = now - timedelta(days=30)
+
+        total_users = User.objects.count()
+        total_scans = Chat.objects.count()
+        total_pdfs = Chat.objects.filter(pdf_report__isnull=False).count()
+
+        # scans per day (last 30 days)
+        scans_qs = Chat.objects.filter(created_at__gte=since).order_by("created_at")
+        scans_per_day = {}
+        for c in scans_qs:
+            day = c.created_at.date().isoformat()
+            scans_per_day[day] = scans_per_day.get(day, 0) + 1
+
+        # aggregate model usage, images analyzed, average risk (best-effort parsing of messages meta)
+        model_usage = {}
+        images_analyzed = 0
+        risk_sum = 0.0
+        risk_count = 0
+
+        # limit scanned chats for aggregation to avoid heavy queries
+        for c in Chat.objects.all().order_by('-created_at')[:2000]:
+            msgs = c.messages or []
+            for m in msgs:
+                meta = m.get("meta") if isinstance(m, dict) else None
+                if not meta or not isinstance(meta, dict):
+                    continue
+                # images count
+                try:
+                    images_analyzed += int(meta.get("images", 0) or 0)
+                except Exception:
+                    pass
+                # model used
+                mu = meta.get("model_used")
+                if mu:
+                    model_usage[mu] = model_usage.get(mu, 0) + 1
+                # risk estimate
+                try:
+                    re = meta.get("risk_estimate")
+                    if re is not None:
+                        risk_sum += float(re)
+                        risk_count += 1
+                except Exception:
+                    pass
+
+        avg_risk = (risk_sum / risk_count) if risk_count else None
+
+        # recent scans (10)
+        recent = []
+        for c in Chat.objects.all().order_by('-created_at')[:10]:
+            model_used = None
+            risk = None
+            msgs = c.messages or []
+            for m in msgs:
+                meta = m.get("meta") if isinstance(m, dict) else None
+                if meta:
+                    if model_used is None and meta.get("model_used"):
+                        model_used = meta.get("model_used")
+                    if risk is None and meta.get("risk_estimate") is not None:
+                        risk = meta.get("risk_estimate")
+            recent.append({
+                "id": c.id,
+                "created_at": c.created_at,
+                "model_used": model_used,
+                "risk_estimate": risk,
+                "has_pdf": bool(c.pdf_report)
+            })
+
+        payload = {
+            "totals": {
+                "users": total_users,
+                "scans": total_scans,
+                "pdf_reports": total_pdfs,
+                "images_analyzed": images_analyzed
+            },
+            "scans_per_day": scans_per_day,
+            "model_usage": model_usage,
+            "average_risk_estimate": avg_risk,
+            "recent_scans": recent
+        }
+        return Response(payload)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # ------------------ Universal symptom assessment (new) ------------------
 @api_view(["POST"])
