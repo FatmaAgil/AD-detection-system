@@ -18,6 +18,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import logging
+import time  # <-- add this import
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
@@ -37,6 +38,7 @@ from django.core.files.base import ContentFile
 import io
 from .models import Chat
 from .serializers import ChatSerializer
+from django.http import FileResponse  # <-- added FileResponse import
 
 # Create your views here.
 
@@ -950,8 +952,23 @@ def universal_symptom_assessment(request):
         pdf_buffer = generate_pdf_report(report, symptom_answers, scan_results, request.user, assessment)
         pdf_file = ContentFile(pdf_buffer.getvalue(), name=f"assessment_{request.user.id}_{assessment['final_confidence']:.2f}.pdf")
 
-        # Save or update Chat
-        chat, created = Chat.objects.get_or_create(user=request.user, defaults={'messages': []})
+        # Create a new Chat for this assessment (instead of get_or_create)
+        chat = Chat.objects.create(user=request.user, messages=[])
+
+        # Append messages to the new Chat
+        chat.messages.append({
+            "sender": "user",
+            "text": f"Universal assessment requested (skin_tone={skin_tone}, user_type={user_type})"
+        })
+        chat.messages.append({
+            "sender": "ai",
+            "text": report.get("summary", "Assessment completed."),
+            "meta": {
+                "assessment_result": assessment,
+                "skin_insights": generate_skin_tone_insights(symptom_answers, skin_tone, scan_results),
+            }
+        })
+
         chat.pdf_report = pdf_file
         chat.save()
 
@@ -1489,3 +1506,130 @@ def model_health_check(request):
         })
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def save_adscan(request):
+    """
+    Create a new Chat entry for every saved scan so previous saves are retained.
+    Attaches a generated PDF (if generation succeeds) and returns the created Chat.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        user = request.user
+        data = request.data or {}
+        results = data.get("results", []) or []
+        universal_report = data.get("universal_report") or {}
+        risk_estimate = float(data.get("risk_estimate") or 0.0)
+        model_used = data.get("model_used") or "unknown"
+        timestamp = data.get("timestamp") or None
+
+        # Build messages for this saved scan
+        messages = [
+            {"sender": "user", "text": f"Saved scan ({model_used}){(' at '+timestamp) if timestamp else ''}"},
+        ]
+        summary = universal_report.get("summary") or f"Scan saved (risk={risk_estimate:.2f})"
+        messages.append({
+            "sender": "ai",
+            "text": summary,
+            "meta": {
+                "risk_estimate": risk_estimate,
+                "model_used": model_used,
+                "images": len(results)
+            }
+        })
+
+        # Create a new Chat record (do not overwrite existing ones)
+        chat = Chat.objects.create(user=user, messages=messages)
+
+        # Try to generate and attach PDF (best-effort)
+        try:
+            symptom_answers = universal_report.get("symptom_answers", {})
+            pdf_buffer = generate_pdf_report(universal_report, symptom_answers, results, user, universal_report)
+            if pdf_buffer:
+                pdf_name = f"adscan_{user.id}_{int(time.time())}.pdf"
+                chat.pdf_report.save(pdf_name, ContentFile(pdf_buffer.getvalue()), save=False)
+        except Exception as e:
+            logger.exception("PDF generation failed for save_adscan: %s", e)
+
+        chat.save()
+        serializer = ChatSerializer(chat, context={"request": request})
+        return Response({"message": "Scan saved successfully.", "chat": serializer.data}, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        logger.exception("save_adscan failed: %s", e)
+        return Response({"error": "Failed to save scan."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_scan_history(request):
+    """
+    Get list of all saved scans for the current user
+    """
+    try:
+        chats = Chat.objects.filter(user=request.user).order_by('-created_at')
+        serializer = ChatSerializer(chats, many=True, context={"request": request})
+        return Response(serializer.data)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_scan_details(request, chat_id):
+    """
+    Get full details of a specific saved scan
+    """
+    try:
+        chat = Chat.objects.get(id=chat_id, user=request.user)
+        
+        # Extract the detailed data from chat messages and meta
+        scan_data = {
+            "id": chat.id,
+            "created_at": chat.created_at,
+            "messages": chat.messages,
+            "has_pdf": bool(chat.pdf_report),
+            "pdf_url": chat.pdf_report.url if chat.pdf_report else None
+        }
+        
+        return Response(scan_data)
+    except Chat.DoesNotExist:
+        return Response({"error": "Scan not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def download_scan_pdf(request, chat_id):
+    """
+    Download the PDF report for a specific scan
+    """
+    try:
+        chat = Chat.objects.get(id=chat_id, user=request.user)
+        
+        if not chat.pdf_report:
+            return Response({"error": "No PDF available for this scan"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Return the PDF file
+        response = FileResponse(chat.pdf_report.open(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="ad_scan_report_{chat_id}.pdf"'
+        return response
+        
+    except Chat.DoesNotExist:
+        return Response({"error": "Scan not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def delete_scan(request, chat_id):
+    """
+    Delete a saved scan
+    """
+    try:
+        chat = Chat.objects.get(id=chat_id, user=request.user)
+        chat.delete()
+        return Response({"message": "Scan deleted successfully"})
+    except Chat.DoesNotExist:
+        return Response({"error": "Scan not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

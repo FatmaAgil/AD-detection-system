@@ -81,6 +81,7 @@ export default function AdScan() {
 
   const [errors, setErrors] = useState([]); // validation errors
   const [analyzing, setAnalyzing] = useState(false); // scan in progress
+  const [saving, setSaving] = useState(false); // save in progress
 
   const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -242,6 +243,49 @@ export default function AdScan() {
       alert("Network error while uploading images.");
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  // Save current scan (results + report + estimate) to backend
+  const handleSaveScan = async () => {
+    // nothing to save
+    if (!results || results.length === 0) {
+      alert("No scan results to save.");
+      return;
+    }
+    setSaving(true);
+    setErrors([]);
+    try {
+      const payload = {
+        results,
+        universal_report: universalReport,
+        risk_estimate: riskEstimate,
+        model_used: selectedModel,
+        timestamp: new Date().toISOString(),
+      };
+
+      const res = await fetch("http://localhost:8000/api/adscan/save/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        alert(data.message || "Scan saved successfully.");
+      } else {
+        const msg = data.error || data.detail || "Failed to save scan.";
+        setErrors((prev) => [...prev, msg]);
+        alert(msg);
+      }
+    } catch (err) {
+      setErrors((prev) => [...prev, err.message || "Network error"]);
+      alert("Network error while saving scan.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -791,6 +835,24 @@ export default function AdScan() {
                 </div>
                 <div style={{ marginTop: 8, color: "#334155", fontSize: 14 }}>
                   This estimate combines the image analysis and symptom answers. It is not a diagnosis — consult a clinician for confirmation.
+                </div>
+                {/* Save Scan button */}
+                <div style={{ marginTop: 14 }}>
+                  <button
+                    onClick={handleSaveScan}
+                    disabled={saving || analyzing}
+                    style={{
+                      background: saving ? "#94c6ff" : "#10b981",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "8px 16px",
+                      cursor: saving || analyzing ? "not-allowed" : "pointer",
+                      fontWeight: "600",
+                    }}
+                  >
+                    {saving ? "Saving..." : "Save Scan"}
+                  </button>
                 </div>
               </>
             ) : (

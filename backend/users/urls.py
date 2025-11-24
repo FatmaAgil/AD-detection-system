@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import admin_stats, RegisterView, LoginView, Verify2FAView, CreateAdminView, Resend2FAView, ContactMessageListCreateView, UserProfileView, UserContactMessagesView, AdScanImageUploadView, AdScanAPIView, universal_symptom_assessment, ChatListCreateView, ChatRetrieveUpdateDestroyView, diagnose_model_issue, model_health_check, debug_model_performance
+from .views import admin_stats, RegisterView, LoginView, Verify2FAView, CreateAdminView, Resend2FAView, ContactMessageListCreateView, UserProfileView, UserContactMessagesView, AdScanImageUploadView, AdScanAPIView, universal_symptom_assessment, ChatListCreateView, ChatRetrieveUpdateDestroyView, diagnose_model_issue, model_health_check, debug_model_performance, save_adscan, get_scan_history, get_scan_details, download_scan_pdf, delete_scan
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import UserListCreateView, UserRetrieveUpdateDestroyView, MessageReplyListCreateView, ContactMessageUpdateDeleteView, MessageReplyUpdateView
 
@@ -19,6 +19,7 @@ urlpatterns = [
     path("profile/", UserProfileView.as_view(), name="user-profile"),
     path("my-messages/", UserContactMessagesView.as_view(), name="user-contact-messages"),
     path("adscan/upload/", AdScanImageUploadView.as_view(), name="adscan-upload"),
+    path("adscan/save/", save_adscan, name="adscan-save"),  # <-- add this route
     path('api/adscan/', AdScanAPIView.as_view(), name='adscan-single'),
     path('universal-assessment/', universal_symptom_assessment, name='universal-assessment'),
     path("admin/stats/", admin_stats, name="admin-stats"),
@@ -27,4 +28,8 @@ urlpatterns = [
     path('api/model-diagnose/', diagnose_model_issue, name='model-diagnose'),
     path('api/model-health/', model_health_check, name='model-health'),
     path('api/debug-model/', debug_model_performance, name='debug-model'),
+    path('scan-history/', get_scan_history, name='scan-history'),
+    path('scan-details/<int:chat_id>/', get_scan_details, name='scan-details'),
+    path('download-scan-pdf/<int:chat_id>/', download_scan_pdf, name='download-scan-pdf'),
+    path('delete-scan/<int:chat_id>/', delete_scan, name='delete-scan'),
 ]
